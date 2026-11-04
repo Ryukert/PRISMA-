@@ -348,6 +348,34 @@ class TestReadersAndExports(unittest.TestCase):
         self.assertEqual(df["title"].iloc[0], "Tagged WoS title")
         self.assertEqual(df["authors"].iloc[0], "Doe, J; Roe, R")
 
+    def test_endnote_semicolon_and_mislabeled(self):
+        enw = self.write("x.enw", "%0 Journal Article\n%T EndNote title\n%A Doe, J.\n%A Roe, R.\n%D 2020\n"
+                                  "%R 10.1016/e.1\n%K mems\n%G English\n\n%0 Conference Proceedings\n%T Second\n%D 2021\n")
+        df, info = pc.read_source(enw)
+        self.assertEqual((info["format"], len(df)), ("endnote", 2))
+        self.assertEqual(df["authors"].iloc[0], "Doe, J.; Roe, R.")
+        self.assertEqual(df["language"].iloc[0], "English")
+        semi = self.write("excel_es.csv", "Title;Year;DOI;Language\nTítulo con, coma;2019;10.1016/s.1;Spanish\n")
+        df, info = pc.read_source(semi)
+        self.assertEqual(info["format"], "csv_semicolon")
+        self.assertEqual(df["title"].iloc[0], "Título con, coma")
+        tsv_as_xls = self.write("savedrecs.xls", "PT\tAU\tTI\tPY\tDI\tLA\nJ\tDoe\tTab title\t2020\t10.1016/t.1\tEnglish\n")
+        df, info = pc.read_source(tsv_as_xls)
+        self.assertEqual((info["format"], df["title"].iloc[0], info["name"]), ("tsv", "Tab title", "WoS"))
+        ciw = self.write("export.ciw", "FN Clarivate\nVR 1.0\nPT J\nTI CIW title\nPY 2022\nLA English\nER\n")
+        df, info = pc.read_source(ciw)
+        self.assertEqual((info["format"], df["language"].iloc[0]), ("wos_tagged", "English"))
+        html = self.write("fake.xls", "<html><body><table><tr><td>x</td></tr></table></body></html>")
+        with self.assertRaises(ValueError):
+            pc.read_source(html)
+        xlsx_as_xls = os.path.join(self.tmp, "real_xlsx.xls")
+        pd.DataFrame({"Title": ["Zip title"], "Year": [2018]}).to_excel(xlsx_as_xls, index=False, engine="openpyxl")
+        df, info = pc.read_source(xlsx_as_xls)
+        self.assertEqual((info["format"], df["title"].iloc[0]), ("excel", "Zip title"))
+        nocols = self.write("raro.csv", "a,b\n1,2\n")
+        with self.assertRaises(ValueError):
+            pc.read_source(nocols)
+
     def test_exports_and_session(self):
         d, cfg = screening_fixture()
         out, _ = pc.run_screening(d, cfg)

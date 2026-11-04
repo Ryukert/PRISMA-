@@ -287,7 +287,39 @@ COLUMN_ALIASES = {
     "journal": ["Source title", "Source Title", "SO", "Publication Title", "Journal/Book", "Journal"],
     "language": ["Language of Original Document", "Language", "LA", "Languages"],
 }
-SUPPORTED_EXTENSIONS = [".csv", ".xlsx", ".xlsm", ".xls", ".txt", ".tsv", ".ris", ".bib", ".nbib"]
+SUPPORTED_EXTENSIONS = [".csv", ".xlsx", ".xlsm", ".xls", ".ods", ".txt", ".tsv", ".ris", ".bib", ".nbib",
+                        ".ciw", ".enw"]
+
+
+class MissingDependency(ImportError):
+    """Falta una librería opcional; `package` es el nombre para pip."""
+
+    def __init__(self, package: str, message: str):
+        super().__init__(message)
+        self.package = package
+
+
+def _excel_engine(fmt: str):
+    """calamine (lee xls/xlsx/ods, si está instalado) → si no, xlrd para .xls, openpyxl para .xlsx, odf para .ods."""
+    try:
+        import python_calamine  # noqa: F401
+        return "calamine"
+    except ImportError:
+        pass
+    if fmt == "xls":
+        try:
+            import xlrd  # noqa: F401
+        except ImportError:
+            raise MissingDependency("xlrd", "Para leer archivos .xls (formato Excel antiguo, p. ej. WoS) "
+                                            "se necesita la librería xlrd.") from None
+        return "xlrd"
+    if fmt == "ods":
+        try:
+            import odf  # noqa: F401
+        except ImportError:
+            raise MissingDependency("odfpy", "Para leer archivos .ods se necesita la librería odfpy.") from None
+        return "odf"
+    return "openpyxl"
 RIS_TYPES = {"JOUR": "Article", "JFULL": "Article", "EJOUR": "Article", "CONF": "Conference Paper",
              "CPAPER": "Conference Paper", "CHAP": "Book Chapter", "BOOK": "Book", "RPRT": "Report",
              "THES": "Thesis", "GEN": "Generic", "MGZN": "Magazine Article", "NEWS": "Newspaper Article"}
@@ -313,27 +345,41 @@ def _decode(raw: bytes) -> str:
         return raw.decode("latin-1")
 
 
+def sniff_format(path, raw: bytes) -> str:
+    """Detecta el formato por el CONTENIDO (no solo la extensión): un '.xls' puede ser texto, etc."""
+    ext = Path(path).suffix.lower()
+    if raw[:4] == b"\xd0\xcf\x11\xe0":
+        return "xls"                      # Excel 97-2003 (OLE2)
+    if raw[:2] == b"PK":
+        return "ods" if ext == ".ods" else "excel"   # xlsx/xlsm/ods son ZIP
+    head = _decode(raw[:6000]) if raw else ""
+    if re.match(r"\s*<(?:!doctype|html|table|\?xml)", head, re.I):
+        return "html"
+    return detect_format(path, head)
+
+
 def detect_format(path, head: str = "") -> str:
     ext = Path(path).suffix.lower()
-    if ext in (".xlsx", ".xlsm"):
-        return "excel"
-    if ext == ".xls":
-        return "xls"
-    if ext == ".bib":
-        return "bibtex"
-    if ext == ".nbib":
-        return "medline"
-    if ext == ".ris" or re.search(r"^TY  - ", head, re.M):
+    if re.search(r"^TY  - ", head, re.M):
         return "ris"
-    if re.match(r"^\s*(FN |VR |PT [A-Z])", head):
+    if re.match(r"^\s*(FN |VR |PT [A-Z])", head) or ext == ".ciw":
         return "wos_tagged"
     if re.search(r"^PMID-", head, re.M):
         return "medline"
-    if re.search(r"^\s*@\w+\s*[{(]", head, re.M) and ext != ".csv":
+    if re.search(r"^%0 ", head, re.M) or ext == ".enw":
+        return "endnote"
+    if re.search(r"^\s*@\w+\s*[{(]", head, re.M):
         return "bibtex"
-    if ext == ".csv":
-        return "csv"
-    return "tsv"
+    ext_map = {".bib": "bibtex", ".nbib": "medline", ".ris": "ris", ".xlsx": "excel", ".xlsm": "excel",
+               ".xls": "xls", ".ods": "ods"}
+    if ext in ext_map and ext not in (".xls", ".xlsx", ".xlsm", ".ods"):
+        return ext_map[ext]
+    first = head.splitlines()[0] if head.strip() else ""
+    if first.count("\t") > first.count(",") and first.count("\t") > first.count(";"):
+        return "tsv"
+    if first.count(";") > first.count(","):
+        return "csv_semicolon"            # CSV de Excel en configuración regional española
+    return "csv"
 
 
 def _parse_ris(text: str) -> list[dict]:
@@ -394,6 +440,30 @@ def _parse_medline(text: str) -> list[dict]:
             cur[tag].append(m.group(2).strip())
             last = tag
         elif last and line.startswith("      "):
+            cur[last][-1] += " " + line.strip()
+    if cur:
+        recs.append(dict(cur))
+    return recs
+
+
+def _parse_endnote(text: str) -> list[dict]:
+    """EndNote / Refer (.enw): líneas '%T título', '%A autor'…; registros separados por línea en blanco."""
+    recs, cur, last = [], defaultdict(list), None
+    for line in text.splitlines():
+        if not line.strip():
+            if cur:
+                recs.append(dict(cur))
+            cur, last = defaultdict(list), None
+            continue
+        m = re.match(r"^%(\S)\s?(.*)$", line)
+        if m:
+            tag = m.group(1)
+            if tag == "0" and cur:
+                recs.append(dict(cur))
+                cur = defaultdict(list)
+            cur[tag].append(m.group(2).strip())
+            last = tag
+        elif last:
             cur[last][-1] += " " + line.strip()
     if cur:
         recs.append(dict(cur))
@@ -530,6 +600,18 @@ def _records_from_tagged(fmt: str, recs: list[dict]) -> pd.DataFrame:
                 "journal": _tag_get(r, ["JT", "TA"]),
                 "language": _tag_all(r, ["LA"]),
             })
+        elif fmt == "endnote":
+            rows.append({
+                "title": _tag_get(r, ["T"]),
+                "abstract": _tag_get(r, ["X"]),
+                "year": _tag_get(r, ["D", "8"]),
+                "doi": _tag_get(r, ["R"]) or _tag_get(r, ["U"]),
+                "doc_type": _tag_get(r, ["0"]),
+                "authors": _tag_all(r, ["A"]),
+                "keywords": _tag_all(r, ["K"]),
+                "journal": _tag_get(r, ["J", "B"]),
+                "language": _tag_get(r, ["G"]),
+            })
         elif fmt == "bibtex":
             rows.append({
                 "title": r.get("title", ""),
@@ -587,7 +669,8 @@ def guess_source_name(path, columns, fmt: str) -> str:
         return "PubMed"
     if "eid" in cols or "scopus" in stem or ("source title" in cols and "link" in cols):
         return "Scopus"
-    if fmt == "wos_tagged" or "ut (unique wos id)" in cols or "ut" in cols or "wos" in stem or "savedrecs" in stem:
+    if (fmt == "wos_tagged" or "ut (unique wos id)" in cols or "ut (unique id)" in cols or "ut" in cols
+            or "wos" in stem or "savedrecs" in stem):
         return "WoS"
     if "ieee terms" in cols or "document identifier" in cols or "ieee" in stem:
         return "IEEE"
@@ -601,35 +684,44 @@ def read_source(path, source_name: str | None = None, col_map: dict | None = Non
     """
     path = str(path)
     raw_bytes = Path(path).read_bytes()
-    head = ""
-    ext = Path(path).suffix.lower()
-    if ext not in (".xlsx", ".xlsm", ".xls"):
-        head = _decode(raw_bytes[:4000]) if raw_bytes else ""
-    fmt = detect_format(path, head)
+    if not raw_bytes:
+        raise ValueError("El archivo está vacío.")
+    fmt = sniff_format(path, raw_bytes)
     columns, mapping = [], {}
 
-    if fmt in ("excel", "xls"):
-        if fmt == "xls":
-            try:
-                import xlrd  # noqa: F401
-            except ImportError as e:
-                raise ImportError("Para leer archivos .xls instala xlrd:  pip install xlrd") from e
-        raw = pd.read_excel(path, dtype=str, engine="xlrd" if fmt == "xls" else "openpyxl")
+    if fmt == "html":
+        raise ValueError("Este archivo es en realidad una página web (HTML) con otra extensión. "
+                         "Ábrelo en Excel y guárdalo como .xlsx o .csv, o vuelve a exportarlo desde la base de datos.")
+    if fmt in ("excel", "xls", "ods"):
+        import warnings
+        engine = _excel_engine(fmt)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")      # aviso de pandas sobre xlrd obsoleto
+            raw = pd.read_excel(path, dtype=str, engine=engine)
+        raw = raw.loc[:, [not str(c).startswith("Unnamed:") or raw[c].notna().any() for c in raw.columns]]
         columns = list(raw.columns)
         df, mapping = _standardize_table(raw, col_map)
-    elif fmt in ("csv", "tsv"):
+        if "title" not in mapping and "doi" not in mapping:
+            raise ValueError("No se encontró una columna de título ni de DOI. Revisa el 'Mapeo de columnas' del "
+                             f"Paso 1. Columnas del archivo: {', '.join(map(str, columns[:15]))}…")
+    elif fmt in ("csv", "csv_semicolon", "tsv"):
         text = _decode(raw_bytes)
         if fmt == "csv":
             raw = pd.read_csv(StringIO(text), dtype=str, keep_default_na=False, on_bad_lines="skip")
+        elif fmt == "csv_semicolon":
+            raw = pd.read_csv(StringIO(text), sep=";", dtype=str, keep_default_na=False, on_bad_lines="skip")
         else:
             raw = pd.read_csv(StringIO(text), sep="\t", dtype=str, keep_default_na=False,
                               on_bad_lines="skip", quoting=3, index_col=False)
         columns = list(raw.columns)
         df, mapping = _standardize_table(raw, col_map)
+        if "title" not in mapping and "doi" not in mapping:
+            raise ValueError("No se encontró una columna de título ni de DOI. Revisa el 'Mapeo de columnas' del "
+                             f"Paso 1. Columnas del archivo: {', '.join(map(str, columns[:15]))}…")
     else:
         text = _decode(raw_bytes)
-        parser = {"ris": _parse_ris, "wos_tagged": _parse_wos_tagged,
-                  "medline": _parse_medline, "bibtex": _parse_bibtex}[fmt]
+        parser = {"ris": _parse_ris, "wos_tagged": _parse_wos_tagged, "medline": _parse_medline,
+                  "bibtex": _parse_bibtex, "endnote": _parse_endnote}[fmt]
         df = _records_from_tagged(fmt, parser(text))
         columns = sorted({k for k in df.columns})
         mapping = {f: f for f in FIELDS}

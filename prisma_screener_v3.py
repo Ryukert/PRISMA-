@@ -75,8 +75,10 @@ VIEW_FILTERS = {
     "Todos": None,
 }
 FILE_TYPES = [("Exportaciones bibliográficas", " ".join(f"*{e}" for e in pc.SUPPORTED_EXTENSIONS)),
-              ("CSV", "*.csv"), ("Excel", "*.xlsx *.xls"), ("RIS", "*.ris"), ("BibTeX", "*.bib"),
-              ("PubMed / WoS texto", "*.nbib *.txt"), ("Todos", "*.*")]
+              ("CSV / texto tabulado", "*.csv *.tsv *.txt"), ("Excel / LibreOffice", "*.xlsx *.xlsm *.xls *.ods"),
+              ("RIS (Zotero, Mendeley, Scopus, WoS)", "*.ris"), ("BibTeX", "*.bib"),
+              ("WoS texto plano", "*.txt *.ciw"), ("PubMed", "*.nbib *.txt"), ("EndNote", "*.enw"),
+              ("Todos los archivos", "*.*")]
 
 
 def safe_name(s: str) -> str:
@@ -1195,9 +1197,10 @@ class SysReviewApp(ctk.CTk):
         body.pack(fill="both", expand=True, padx=28, pady=10)
         help_frame = ctk.CTkFrame(body, fg_color="#eff6ff", corner_radius=8, border_color="#bfdbfe", border_width=1)
         help_frame.pack(fill="x", pady=(0, 10))
-        ctk.CTkLabel(help_frame, text="💡  Formatos: Scopus CSV · WoS Excel / texto tabulado / texto plano · PubMed .nbib · "
-                                      "IEEE CSV · RIS (Zotero, Mendeley, EndNote) · BibTeX · CSV/Excel genérico. "
-                                      "Se usan Author Keywords + Index Keywords / Keywords Plus.",
+        ctk.CTkLabel(help_frame, text="💡  Formatos: CSV (coma o punto y coma) · Excel .xlsx/.xls · LibreOffice .ods · "
+                                      "WoS texto tabulado / texto plano / .ciw · RIS · BibTeX · PubMed .nbib · EndNote .enw "
+                                      "· IEEE CSV. El formato se detecta por el contenido, aunque la extensión no coincida. "
+                                      "Si falta una librería (p. ej. xlrd para .xls), la app ofrece instalarla.",
                      font=("Arial", 10), text_color="#1d4ed8", wraplength=1000, justify="left").pack(anchor="w", padx=14, pady=8)
 
         src_card = _card_frame(body, "FUENTES")
@@ -1252,18 +1255,28 @@ class SysReviewApp(ctk.CTk):
         if not new:
             return
 
+        self._read_and_add(new, col_map)
+
+    def _read_and_add(self, new, col_map):
         def work():
             out = []
             for p in new:
                 try:
                     _df, info = pc.read_source(p, None, col_map)
-                    out.append((p, info, None))
+                    out.append((p, info, None, None))
+                except pc.MissingDependency as e:
+                    out.append((p, None, str(e), e.package))
                 except Exception as e:
-                    out.append((p, None, str(e)))
+                    out.append((p, None, str(e), None))
             return out
 
         def ok(results):
-            for p, info, err in results:
+            missing = {}
+            for p, info, err, pkg in results:
+                if pkg:
+                    missing.setdefault(pkg, []).append(p)
+                    self._log(self.log_load, f"⚠ {Path(p).name}: {err}\n", YELLOW)
+                    continue
                 if err:
                     self._log(self.log_load, f"✗ {Path(p).name}: {err}\n", RED)
                     continue
@@ -1271,11 +1284,45 @@ class SysReviewApp(ctk.CTk):
                 miss = f"  ⚠ faltan: {', '.join(info['missing_fields'])}" if info["missing_fields"] else ""
                 self._log(self.log_load, f"✓ {info['file']} → {info['name']} ({info['format']}, {info['n']} reg.){miss}\n",
                           YELLOW if miss else GREEN)
+            if missing:
+                self.after(50, lambda: self._offer_install(
+                    list(missing), lambda: self._read_and_add([p for ps in missing.values() for p in ps], col_map)))
 
         def err(e, tb):
             self._log(self.log_load, f"✗ Error: {e}\n{tb}\n", RED)
 
         self._log(self.log_load, f"── Leyendo {len(new)} archivo(s)… ──\n", ACCENT2)
+        self._bg(work, ok, err)
+
+    def _offer_install(self, packages, retry):
+        """Ofrece instalar librerías faltantes con pip (solo con permiso del usuario) y reintenta."""
+        names = ", ".join(packages)
+        if not messagebox.askyesno("Falta una librería",
+                                   f"Para leer este formato se necesita: {names}\n\n¿Instalarla ahora con pip?\n"
+                                   f"(Equivale a ejecutar:  pip install {' '.join(packages)})", parent=self):
+            self._log(self.log_load, f"ℹ Instala manualmente con:  pip install {' '.join(packages)}\n", MUTED2)
+            return
+        import importlib
+        import subprocess
+        import sys
+
+        def work():
+            proc = subprocess.run([sys.executable, "-m", "pip", "install", *packages], capture_output=True, text=True)
+            if proc.returncode != 0:
+                raise RuntimeError((proc.stderr or proc.stdout)[-800:])
+            importlib.invalidate_caches()
+            return True
+
+        def ok(_):
+            self._log(self.log_load, f"✓ Instalado: {names}. Reintentando lectura…\n", GREEN)
+            self.after(50, retry)
+
+        def err(e, _tb):
+            self._log(self.log_load, f"✗ No se pudo instalar {names}: {e}\n", RED)
+            messagebox.showerror("Error al instalar", f"No se pudo instalar {names}.\n\nPrueba en una terminal:\n"
+                                 f"  pip install {' '.join(packages)}", parent=self)
+
+        self._log(self.log_load, f"── Instalando {names}… ──\n", ACCENT2)
         self._bg(work, ok, err)
 
     def _add_source_row(self, path, name, info=None):

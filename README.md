@@ -15,9 +15,22 @@ python prisma_screener_v3.py
 
 ## Flujo
 
-1. **Cargar** — una o varias fuentes: Scopus CSV, WoS (Excel, texto tabulado o texto plano),
-   PubMed `.nbib`, IEEE CSV, RIS (Zotero/Mendeley/EndNote), BibTeX o CSV/Excel genérico.
-   La fuente se detecta sola y su nombre es editable.
+1. **Cargar** — una o varias fuentes en cualquiera de estos formatos:
+
+   | Formato | Extensiones | Típico de |
+   |---|---|---|
+   | CSV (coma o punto y coma) | `.csv` | Scopus, IEEE, Lens, Excel en español |
+   | Excel / LibreOffice | `.xlsx` `.xlsm` `.xls` `.ods` | WoS («Excel»), cualquier hoja |
+   | Texto tabulado | `.txt` `.tsv` | WoS («Tab delimited») |
+   | Texto plano etiquetado | `.txt` `.ciw` | WoS («Plain text», «EndNote Desktop») |
+   | RIS | `.ris` | Scopus, WoS, Zotero, Mendeley |
+   | BibTeX | `.bib` | Scopus, Google Scholar, Zotero |
+   | MEDLINE | `.nbib` `.txt` | PubMed |
+   | EndNote / Refer | `.enw` | EndNote, Google Scholar |
+
+   El formato se detecta por el **contenido**, aunque la extensión no coincida (p. ej. un `.xls`
+   que en realidad es texto tabulado). Si falta una librería (como `xlrd` para `.xls`), la app
+   ofrece instalarla. La fuente (Scopus, WoS, PubMed, IEEE) se detecta sola y su nombre es editable.
 2. **Deduplicar** — DOI normalizado (`https://doi.org/`, `doi:`, mayúsculas), título normalizado
    (sin acentos ni puntuación) y, opcionalmente, títulos similares. Nunca fusiona por título
    registros con DOI distintos, ni títulos similares con números distintos (*Part I* ≠ *Part II*)
