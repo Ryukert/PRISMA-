@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover - depende del entorno
     HAS_RAPIDFUZZ = False
 
 # ─── Esquema de columnas ──────────────────────────────────────────────────────
-FIELDS = ["title", "year", "abstract", "doi", "doc_type", "authors", "keywords", "journal"]
+FIELDS = ["title", "year", "abstract", "doi", "doc_type", "authors", "keywords", "journal", "language"]
 TEXT_FIELDS = [f for f in FIELDS if f != "year"]
 DEDUP_COLS = ["Is_Duplicate", "Duplicate_Of", "Duplicate_Reason"]
 AUTO_COLS = ["Auto_Decision", "Auto_Stage", "Auto_Reason", "Matched_Required", "Matched_Secondary",
@@ -57,6 +57,7 @@ STAGE_DUP = "Duplicado"
 STAGE_YEAR = "Año fuera de rango"
 STAGE_NOYEAR = "Año faltante"
 STAGE_DOCTYPE = "Tipo de documento"
+STAGE_LANG = "Idioma"
 STAGE_REQ = "Bloque obligatorio"
 STAGE_SEC = "Bloque secundario"
 STAGE_EXC = "Términos de exclusión"
@@ -91,6 +92,8 @@ DEFAULT_SCREEN_CFG = {
     "kw_secondary": "",
     "kw_exclude": "",
     "doc_exclude": "",
+    "doc_include": "",           # vacío = todos los tipos
+    "languages": "",             # vacío = todos los idiomas
     "search_blocks": {},
     "min_blocks": 0,            # 0 = todos los bloques activos
     "exclude_mode": "balanced",  # strict | balanced | flag
@@ -218,6 +221,48 @@ def compile_terms(terms, auto_plural: bool = True, display: bool = False):
     return re.compile("|".join(f"(?:{r})" for r in rxs), re.IGNORECASE if display else 0)
 
 
+LANG_CODES = {
+    "eng": "english", "en": "english", "ingles": "english",
+    "spa": "spanish", "es": "spanish", "espanol": "spanish", "castellano": "spanish",
+    "por": "portuguese", "pt": "portuguese", "portugues": "portuguese",
+    "fre": "french", "fra": "french", "fr": "french", "frances": "french",
+    "ger": "german", "deu": "german", "de": "german", "aleman": "german",
+    "chi": "chinese", "zho": "chinese", "chino": "chinese", "ita": "italian", "italiano": "italian",
+    "jpn": "japanese", "rus": "russian", "kor": "korean",
+}
+DOCTYPE_SYNONYMS = {
+    # WoS «Proceedings Paper» ≡ Scopus «Conference Paper»
+    "proceedings paper": "conference paper", "conference proceedings": "conference paper",
+    "documento de sesion": "conference paper", "ponencia": "conference paper",
+    "articulo de conferencia": "conference paper", "cpaper": "conference paper",
+    "journal article": "article", "articulo": "article", "articulo de revista": "article",
+    "article in press": "article",
+    "editorial material": "editorial", "material editorial": "editorial",
+    "revision": "review", "capitulo de libro": "book chapter", "libro": "book",
+}
+SCOPUS_DOCTYPES = {"ar": "Article", "cp": "Conference Paper", "re": "Review", "ch": "Book Chapter", "bk": "Book",
+                   "ed": "Editorial", "le": "Letter", "no": "Note", "sh": "Short Survey", "cr": "Conference Review",
+                   "er": "Erratum", "dp": "Data Paper", "ip": "Article in Press", "tb": "Retracted"}
+
+
+def canon_list(value, kind: str) -> list[str]:
+    """
+    Lista canónica de tipos de documento (kind='doctype') o idiomas (kind='language').
+    Separa por ; , | u OR, normaliza y aplica sinónimos (eng→english, Proceedings Paper→conference paper).
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return []
+    items = value if isinstance(value, (list, tuple)) else re.split(r"[;,|\n]|\s+OR\s+", str(value), flags=re.I)
+    syn = LANG_CODES if kind == "language" else DOCTYPE_SYNONYMS
+    out = []
+    for p in items:
+        t = normalize_text(p).strip(" \"'(){}")
+        t = syn.get(t, t)
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
 def _contains(series: pd.Series, pattern) -> pd.Series:
     return series.map(lambda s: pattern.search(s) is not None).astype(bool)
 
@@ -240,6 +285,7 @@ COLUMN_ALIASES = {
     "index_keywords": ["Index Keywords", "Keywords Plus", "ID", "IEEE Terms", "INSPEC Controlled Terms",
                        "MeSH Terms", "Mesh Terms"],
     "journal": ["Source title", "Source Title", "SO", "Publication Title", "Journal/Book", "Journal"],
+    "language": ["Language of Original Document", "Language", "LA", "Languages"],
 }
 SUPPORTED_EXTENSIONS = [".csv", ".xlsx", ".xlsm", ".xls", ".txt", ".tsv", ".ris", ".bib", ".nbib"]
 RIS_TYPES = {"JOUR": "Article", "JFULL": "Article", "EJOUR": "Article", "CONF": "Conference Paper",
@@ -453,6 +499,7 @@ def _records_from_tagged(fmt: str, recs: list[dict]) -> pd.DataFrame:
                 "authors": _tag_all(r, ["AU", "A1", "A2"]),
                 "keywords": _tag_all(r, ["KW"]),
                 "journal": _tag_get(r, ["T2", "JO", "JF", "JA"]),
+                "language": _tag_all(r, ["LA"]),
             })
         elif fmt == "wos_tagged":
             rows.append({
@@ -464,6 +511,7 @@ def _records_from_tagged(fmt: str, recs: list[dict]) -> pd.DataFrame:
                 "authors": _tag_get(r, ["AU", "AF"], "; "),
                 "keywords": "; ".join(x for x in [_tag_get(r, ["DE"]), _tag_get(r, ["ID"])] if x),
                 "journal": _tag_get(r, ["SO"]),
+                "language": _tag_get(r, ["LA"], "; "),
             })
         elif fmt == "medline":
             doi = ""
@@ -480,6 +528,7 @@ def _records_from_tagged(fmt: str, recs: list[dict]) -> pd.DataFrame:
                 "authors": _tag_all(r, ["FAU"]) or _tag_all(r, ["AU"]),
                 "keywords": _tag_all(r, ["OT", "MH"]),
                 "journal": _tag_get(r, ["JT", "TA"]),
+                "language": _tag_all(r, ["LA"]),
             })
         elif fmt == "bibtex":
             rows.append({
@@ -491,6 +540,7 @@ def _records_from_tagged(fmt: str, recs: list[dict]) -> pd.DataFrame:
                 "authors": "; ".join(a.strip() for a in re.split(r"\s+and\s+", r.get("author", "")) if a.strip()),
                 "keywords": r.get("keywords", r.get("author_keywords", "")),
                 "journal": r.get("journal", r.get("booktitle", "")),
+                "language": r.get("language", r.get("langid", "")),
             })
     return pd.DataFrame(rows, columns=TEXT_FIELDS + ["year"])
 
@@ -859,7 +909,7 @@ def run_screening(df: pd.DataFrame, cfg: dict):
 
     w = d.loc[~dup]
     steps = {"input": int(len(w)), "year_out": 0, "year_missing_excluded": 0, "year_missing_review": 0,
-             "doc_type": 0, "required": 0, "secondary": 0, "exclude_terms": 0, "exclude_review": 0,
+             "doc_type": 0, "language": 0, "required": 0, "secondary": 0, "exclude_terms": 0, "exclude_review": 0,
              "blocks": 0, "near_miss_review": 0, "review": 0, "include": 0}
     if w.empty:
         return compute_status(d), steps
@@ -908,12 +958,24 @@ def run_screening(df: pd.DataFrame, cfg: dict):
         elif cfg["missing_year"] == "review":
             steps["year_missing_review"] = flag(missing, "Año faltante: verificar")
 
-    # 2 — Tipo de documento (coincidencia exacta por parte, p. ej. 'Article; Proceedings Paper')
-    doc_terms = set(parse_terms(cfg["doc_exclude"]))
-    if doc_terms:
-        hit = w["doc_type"].map(
-            lambda s: next((p for p in (normalize_text(x) for x in re.split(r"[;,|]", str(s))) if p in doc_terms), ""))
-        steps["doc_type"] = exclude(hit.ne(""), STAGE_DOCTYPE, "Tipo de documento excluido: " + hit)
+    # 2 — Tipo de documento (coincidencia exacta por parte, p. ej. 'Article; Proceedings Paper').
+    #     Registros sin tipo o sin idioma no se excluyen (no hay dato para decidir).
+    doc_parts = w["doc_type"].map(lambda s: canon_list(s, "doctype"))
+    inc_types = set(canon_list(cfg["doc_include"], "doctype"))
+    if inc_types:
+        miss = doc_parts.map(lambda ps: bool(ps) and not any(p in inc_types for p in ps)).astype(bool)
+        steps["doc_type"] += exclude(miss, STAGE_DOCTYPE, "Tipo de documento no permitido: " + w["doc_type"])
+    exc_types = set(canon_list(cfg["doc_exclude"], "doctype"))
+    if exc_types:
+        hit = doc_parts.map(lambda ps: next((p for p in ps if p in exc_types), ""))
+        steps["doc_type"] += exclude(hit.ne(""), STAGE_DOCTYPE, "Tipo de documento excluido: " + hit)
+
+    # 2b — Idioma
+    langs = set(canon_list(cfg["languages"], "language"))
+    if langs:
+        lp = w["language"].map(lambda s: canon_list(s, "language"))
+        bad = lp.map(lambda ps: bool(ps) and not any(p in langs for p in ps)).astype(bool)
+        steps["language"] = exclude(bad, STAGE_LANG, "Idioma no permitido: " + w["language"])
 
     # 3 — Bloque obligatorio
     p_req = compile_terms(parse_terms(cfg["kw_required"]), ap)
@@ -1049,6 +1111,7 @@ def compute_counts(df: pd.DataFrame) -> dict:
         "excluded_year": int((auto_exc & stage.eq(STAGE_YEAR)).sum()),
         "excluded_missing_year": int((auto_exc & stage.eq(STAGE_NOYEAR)).sum()),
         "excluded_doc_type": int((auto_exc & stage.eq(STAGE_DOCTYPE)).sum()),
+        "excluded_language": int((auto_exc & stage.eq(STAGE_LANG)).sum()),
         "excluded_required": int((auto_exc & stage.eq(STAGE_REQ)).sum()),
         "excluded_secondary": int((auto_exc & stage.eq(STAGE_SEC)).sum()),
         "excluded_terms": int((auto_exc & stage.eq(STAGE_EXC)).sum()),
@@ -1071,7 +1134,8 @@ def compute_counts(df: pd.DataFrame) -> dict:
         "included_by_source": {str(s): int((st.eq(STATUS_INCLUDED) & d["source"].eq(s)).sum())
                                for s in d["source"].unique()},
     }
-    c["removed_other"] = c["excluded_year"] + c["excluded_missing_year"] + c["excluded_doc_type"]
+    c["removed_other"] = (c["excluded_year"] + c["excluded_missing_year"] + c["excluded_doc_type"]
+                          + c["excluded_language"])
     c["removed_automation"] = (c["excluded_required"] + c["excluded_secondary"]
                                + c["excluded_terms"] + c["excluded_blocks"])
     c["unique"] = c["identified_total"] - c["duplicates_total"]
@@ -1358,37 +1422,181 @@ def _has_inner_and(n) -> bool:
     return any(_has_inner_and(c) for c in n[1])
 
 
-def parse_search_query(query: str) -> dict:
+_QUERY_START = re.compile(r'^"?\s*(?:TITLE-ABS-KEY|TITLE-ABS|TITLE|ABS|KEY|AUTHKEY|ALL|TS|TI|AB|AK)\s*[=(]', re.I)
+_REFINE_RE = re.compile(r"\b(?:Refined\s+by|Refine|Refinado\s+por|Refinar(?:\s+por)?)\s*:", re.I)
+
+
+def split_queries(text: str) -> list[str]:
     """
-    Convierte una cadena booleana Scopus/WoS en bloques:
-    cada grupo unido por AND en el nivel superior → un bloque (sus OR → sinónimos).
-    Lo que sigue a AND NOT → términos de exclusión. PUBYEAR / PY → rango de años.
+    Separa varias cadenas pegadas juntas (p. ej. la de WoS y la de Scopus), aunque vengan
+    envueltas en comillas ("…""…"). Una cadena nueva empieza en una línea con código de campo
+    (TS=, TITLE-ABS-KEY(…)) cuando los paréntesis anteriores ya están cerrados.
     """
+    t = (text.replace("“", '"').replace("”", '"').replace("’", "'")
+         .replace("‘", "'").replace('""', "\n"))
+    queries, cur, depth = [], [], 0
+    for line in t.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if cur and depth == 0 and _QUERY_START.match(s) and not re.search(r"\b(?:AND|OR|NOT)\s*$", cur[-1], re.I):
+            queries.append("\n".join(cur))
+            cur = []
+        cur.append(s)
+        depth = max(0, depth + s.count("(") - s.count(")"))
+    if cur:
+        queries.append("\n".join(cur))
+    out = []
+    for q in queries:
+        q = q.strip()
+        if q.count('"') % 2 == 1 and q.startswith('"'):
+            q = q[1:]
+        if q.count('"') % 2 == 1 and q.endswith('"'):
+            q = q[:-1]
+        if q.strip():
+            out.append(q.strip())
+    return out
+
+
+def _extract_refine(q: str):
+    """Línea 'Refine:' de WoS: años, tipos de documento e idiomas."""
+    info = {"years": [], "doc_include": [], "languages": []}
+    m = _REFINE_RE.search(q)
+    if not m:
+        return q, info
+    ref, q = q[m.end():], q[:m.start()]
+    ym = re.search(r"(?:Publication\s+Years?|A[nñ]os?\s+de\s+publicaci[oó]n)\s*:?\s*([0-9 ,–—\-]+|[0-9 OR]+)",
+                   ref, re.I)
+    if ym:
+        info["years"] = [int(y) for y in re.findall(r"\d{4}", ym.group(1))]
+    dm = re.search(r"(?:Document\s+Types?|Tipos?\s+de\s+documentos?)\s*:?\s*([^;\n]+)", ref, re.I)
+    if dm:
+        info["doc_include"] = canon_list(dm.group(1), "doctype")
+    lm = re.search(r"(?:Languages?|Idiomas?)\s*:?\s*([^;\n]+)", ref, re.I)
+    if lm:
+        info["languages"] = canon_list(lm.group(1), "language")
+    return q, info
+
+
+def _extract_wos_inline(q: str):
+    """Filtros WoS dentro de la cadena: DT=(…) y LA=(…)."""
+    dts, las = [], []
+    for m in re.finditer(r"\bDT\s*=\s*\(([^)]*)\)", q, re.I):
+        dts += canon_list(m.group(1), "doctype")
+    for m in re.finditer(r"\bLA\s*=\s*\(([^)]*)\)", q, re.I):
+        las += canon_list(m.group(1), "language")
+    q = re.sub(r"\b(?:DT|LA)\s*=\s*\([^)]*\)", " ", q, flags=re.I)
+    return q, dts, las
+
+
+def _limits_from_removed(removed: list[str]):
+    """Traduce LIMIT-TO / EXCLUDE / DOCTYPE() / LANGUAGE() de Scopus a criterios."""
+    inc, exc, langs, years, ignored = [], [], [], [], []
+    for r in removed:
+        found = False
+        for m in re.finditer(r'(LIMIT-TO|EXCLUDE)\s*\(\s*(DOCTYPE|LANGUAGE|PUBYEAR)\s*,\s*"?([^",)]+)"?', r, re.I):
+            found = True
+            kind, field, val = m.group(1).upper(), m.group(2).upper(), m.group(3).strip()
+            if field == "DOCTYPE":
+                name = canon_list(SCOPUS_DOCTYPES.get(val.lower(), val), "doctype")
+                (inc if kind == "LIMIT-TO" else exc).extend(name)
+            elif field == "LANGUAGE":
+                if kind == "LIMIT-TO":
+                    langs.extend(canon_list(val, "language"))
+                else:
+                    ignored.append(r)
+            elif field == "PUBYEAR" and kind == "LIMIT-TO" and val.isdigit():
+                years.append(int(val))
+        m = re.match(r'(DOCTYPE|LANGUAGE)\s*\(\s*"?([^")]+)"?\s*\)', r, re.I)
+        if m:
+            found = True
+            if m.group(1).upper() == "DOCTYPE":
+                inc.extend(canon_list(SCOPUS_DOCTYPES.get(m.group(2).strip().lower(), m.group(2)), "doctype"))
+            else:
+                langs.extend(canon_list(m.group(2), "language"))
+        if not found:
+            ignored.append(r)
+    return inc, exc, langs, years, ignored
+
+
+def _parse_one_query(query: str) -> dict:
     warnings = []
-    q = query.replace("\u201c", '"').replace("\u201d", '"').replace("\u2019", "'")
+    q, refine = _extract_refine(query)
+    q, dt_inline, la_inline = _extract_wos_inline(q)
     q, removed = _remove_calls(q)
+    inc, exc, langs, lim_years, ignored = _limits_from_removed(removed)
     q, yf, yt = _extract_years(q)
+    years = refine["years"] + lim_years
+    if years:
+        yf = min(years) if yf is None else max(yf, min(years))
+        yt = max(years) if yt is None else min(yt, max(years))
     q = _FIELD_OPEN.sub("(", q)
     q = _WOS_FIELD.sub(" ", q)
-    tree = _QueryParser(_tokenize(q)).parse()
+    toks = _tokenize(q)
+    tree = _QueryParser(toks).parse()
     if tree is None:
         raise ValueError("No se encontraron términos en la cadena.")
-    blocks = {}
-    for i, conj in enumerate(_conjuncts(tree), start=1):
+    blocks = []
+    for conj in _conjuncts(tree):
         terms = parse_terms(_leaves(conj))
         if not terms:
             continue
         if _has_inner_and(conj):
-            warnings.append(f"B{i}: contiene AND anidado dentro de un OR; se aproximó como lista de sinónimos.")
-        blocks[f"B{i}"] = {"label": f"Bloque {i} — {terms[0]}", "terms": ", ".join(terms)}
-    if any(t[0] == "prox" for t in _tokenize(q)):
+            warnings.append(f"B{len(blocks) + 1}: contiene AND anidado dentro de un OR; se aproximó como sinónimos.")
+        blocks.append(terms)
+    if any(t[0] == "prox" for t in toks):
         warnings.append("Los operadores de proximidad (W/n, PRE/n, NEAR) se trataron como AND.")
-    excl = parse_terms(_negs(tree))
-    if removed:
-        warnings.append("Se ignoraron filtros de la base de datos: " + "; ".join(removed[:6])
-                        + (" …" if len(removed) > 6 else ""))
-    return {"search_blocks": blocks, "min_blocks": len(blocks), "kw_exclude": ", ".join(excl),
-            "year_from": yf, "year_to": yt, "warnings": warnings}
+    if ignored:
+        warnings.append("Filtros de la base de datos sin equivalente (ignorados): " + "; ".join(ignored[:5])
+                        + (" …" if len(ignored) > 5 else ""))
+    return {"blocks": blocks, "exclude": parse_terms(_negs(tree)), "year_from": yf, "year_to": yt,
+            "doc_include": list(dict.fromkeys(refine["doc_include"] + dt_inline + inc)),
+            "doc_exclude": list(dict.fromkeys(exc)),
+            "languages": list(dict.fromkeys(refine["languages"] + la_inline + langs)),
+            "warnings": warnings}
+
+
+def parse_search_query(text: str) -> dict:
+    """
+    Convierte una o varias cadenas booleanas Scopus/WoS en criterios de cribado:
+      · cada grupo unido por AND en el nivel superior → un bloque (sus OR → sinónimos)
+      · AND NOT → términos de exclusión
+      · PUBYEAR / PY= / LIMIT-TO(PUBYEAR) / 'Publication Years' → rango de años
+      · LIMIT-TO(DOCTYPE) / DT=( ) / 'Document Types' → tipos de documento permitidos
+      · LIMIT-TO(LANGUAGE) / LA=( ) / 'Languages' → idiomas permitidos
+    Si se pegan varias cadenas (p. ej. WoS + Scopus) los bloques se combinan por posición.
+    """
+    queries = split_queries(text)
+    if not queries:
+        raise ValueError("No se encontraron términos en la cadena.")
+    results = []
+    for k, q in enumerate(queries, start=1):
+        try:
+            results.append(_parse_one_query(q))
+        except ValueError as e:
+            raise ValueError(f"Cadena {k}: {e}") from None
+    warnings = []
+    multi = len(results) > 1
+    for k, r in enumerate(results, start=1):
+        warnings += [f"Cadena {k}: {w}" if multi else w for w in r["warnings"]]
+    sizes = {len(r["blocks"]) for r in results}
+    if len(sizes) > 1:
+        warnings.append("Las cadenas tienen distinto número de bloques; se combinaron por posición.")
+    blocks = {}
+    for i in range(max(sizes)):
+        terms = parse_terms([t for r in results if i < len(r["blocks"]) for t in r["blocks"][i]])
+        blocks[f"B{i + 1}"] = {"label": f"Bloque {i + 1} — {terms[0]}", "terms": ", ".join(terms)}
+    yfs = [r["year_from"] for r in results if r["year_from"] is not None]
+    yts = [r["year_to"] for r in results if r["year_to"] is not None]
+    if len(set(yfs)) > 1 or len(set(yts)) > 1:
+        warnings.append("Las cadenas tienen rangos de años distintos; se usó el más amplio.")
+
+    def union(key):
+        return ", ".join(dict.fromkeys(x for r in results for x in r[key]))
+    return {"search_blocks": blocks, "min_blocks": len(blocks), "kw_exclude": union("exclude"),
+            "year_from": min(yfs) if yfs else None, "year_to": max(yts) if yts else None,
+            "doc_include": union("doc_include"), "doc_exclude": union("doc_exclude"),
+            "languages": union("languages"), "n_queries": len(results), "warnings": warnings}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1429,6 +1637,7 @@ def prisma_layout(counts: dict, title: str = "") -> dict:
         f"      · fuera del rango de años: {c.get('excluded_year', 0)}",
         f"      · año faltante: {c.get('excluded_missing_year', 0)}",
         f"      · tipo de documento: {c.get('excluded_doc_type', 0)}",
+        f"      · idioma: {c.get('excluded_language', 0)}",
     ]
     if c.get("not_screened"):
         row1_r.append(f"   Aún sin cribar: n = {c['not_screened']}")
@@ -1604,7 +1813,8 @@ def build_text_report(counts: dict, review_name: str, cfg: dict | None = None, p
           f"  Otras razones                  {c.get('removed_other', 0):>6}",
           f"    · Fuera de rango de años     {c.get('excluded_year', 0):>6}",
           f"    · Año faltante               {c.get('excluded_missing_year', 0):>6}",
-          f"    · Tipo de documento          {c.get('excluded_doc_type', 0):>6}"]
+          f"    · Tipo de documento          {c.get('excluded_doc_type', 0):>6}",
+          f"    · Idioma                     {c.get('excluded_language', 0):>6}"]
     if c.get("not_screened"):
         L.append(f"  Aún sin cribar                 {c['not_screened']:>6}")
     L += ["", "CRIBADO (título / resumen)",
@@ -1645,7 +1855,9 @@ def build_text_report(counts: dict, review_name: str, cfg: dict | None = None, p
               f"  Obligatorio: {cfg['kw_required'] or '—'}",
               f"  Secundario:  {cfg['kw_secondary'] or '—'}",
               f"  Exclusión:   {cfg['kw_exclude'] or '—'}",
+              f"  Tipos permitidos: {cfg['doc_include'] or 'todos'}",
               f"  Tipos excl.: {cfg['doc_exclude'] or '—'}",
+              f"  Idiomas permitidos: {cfg['languages'] or 'todos'}",
               f"  Bloques mínimos: {cfg['min_blocks'] or 'todos'}"]
         for bid, b in cfg["search_blocks"].items():
             terms = parse_terms(b.get("terms", ""))

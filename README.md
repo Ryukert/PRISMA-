@@ -40,8 +40,19 @@ python prisma_screener_v3.py
 
 - Coincidencia por **palabra completa**, sin distinguir mayúsculas ni acentos.
 - Bloques vacíos se ignoran; "bloques mínimos = 0" significa *todos*.
-- **Importar cadena**: pega tu cadena de Scopus (`TITLE-ABS-KEY(...)`) o WoS (`TS=(...)`) y se convierte
-  en bloques (cada grupo unido por AND), exclusiones (AND NOT) y rango de años (PUBYEAR / PY).
+- **Importar cadena**: pega tu cadena de Scopus (`TITLE-ABS-KEY(...)`) o WoS (`TS=(...)`), o **ambas juntas**,
+  y se convierte en criterios de cribado:
+
+  | En la cadena | Se convierte en |
+  |---|---|
+  | Grupos unidos por `AND` | Bloques (sus `OR` son sinónimos); todos obligatorios |
+  | `AND NOT (...)` | Términos de exclusión |
+  | `PUBYEAR > 2011`, `PY=(2012-2026)`, `Publication Years 2012–2026` | Rango de años |
+  | `LIMIT-TO(DOCTYPE,"ar")`, `DT=(Article)`, `Document Types: Article, Proceedings Paper` | Tipos de documento permitidos |
+  | `LIMIT-TO(LANGUAGE,"English")`, `LA=(English)`, `Languages: English, Spanish` | Idiomas permitidos |
+
+  La línea `Refine:` de WoS se lee como filtros, no como términos. *Proceedings Paper* (WoS) y
+  *Conference Paper* (Scopus) se tratan como el mismo tipo. Los registros sin tipo o sin idioma no se excluyen.
 
 ## Decisiones automáticas → revisión manual
 

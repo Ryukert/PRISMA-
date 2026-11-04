@@ -227,7 +227,77 @@ class TestQueryParser(unittest.TestCase):
         self.assertIn("bridge*", r["search_blocks"]["B2"]["terms"])
         self.assertEqual(r["kw_exclude"], "medical, patient")
         self.assertEqual((r["year_from"], r["year_to"]), (2016, 2026))
-        self.assertTrue(any("LIMIT-TO" in w for w in r["warnings"]))
+        self.assertEqual(r["doc_include"], "article")      # LIMIT-TO(DOCTYPE,"ar") ahora se aplica
+
+    USER_QUERIES = (
+        '"TS=((MEMS OR "micro-electro-mechanical" OR microelectromechanical) AND (accelerometer* OR accelerograph*) '
+        'AND ("low-noise" OR "low noise" OR "ultra-low noise" OR "high-resolution" OR ADXL35* OR ADXL1002 OR IIS3DWB '
+        'OR SF1500 OR SF1600 OR "Silicon Designs") AND ("structural health monitoring" OR SHM OR "modal identification" '
+        'OR "operational modal analysis" OR "ambient vibration" OR "natural frequenc*" OR "dynamic characteri*" OR '
+        '"system identification" OR building* OR bridge* OR tower* OR "civil structure*" OR "civil infrastructure" OR '
+        '"shake table" OR footbridge* OR heritage))\n'
+        'Refine: Publication Years 2012–2026; Document Types: Article, Proceedings Paper; Languages: English, Spanish"'
+        '"TITLE-ABS-KEY ( ( mems OR "micro-electro-mechanical" OR microelectromechanical ) AND ( accelerometer* OR '
+        'accelerograph* ) AND ( "low-noise" OR "low noise" OR "ultra-low noise" OR "high-resolution" OR adxl35* OR '
+        'adxl1002 OR iis3dwb OR sf1500 OR sf1600 OR "Silicon Designs" ) AND ( "structural health monitoring" OR shm OR '
+        '"modal identification" OR "operational modal analysis" OR "ambient vibration" OR "natural frequenc*" OR '
+        '"dynamic characteri*" OR "system identification" OR building* OR bridge* OR tower* OR "civil structure*" OR '
+        '"civil infrastructure" OR "shake table" OR footbridge* OR heritage ) ) AND PUBYEAR > 2011 AND ( LIMIT-TO ( '
+        'DOCTYPE , "ar" ) OR LIMIT-TO ( DOCTYPE , "cp" ) ) AND ( LIMIT-TO ( LANGUAGE , "English" ) OR LIMIT-TO ( '
+        'LANGUAGE , "Spanish" ) )"'
+    )
+
+    def test_user_wos_and_scopus_together(self):
+        r = pc.parse_search_query(self.USER_QUERIES)
+        self.assertEqual(r["n_queries"], 2)
+        self.assertEqual(len(r["search_blocks"]), 4)
+        self.assertEqual(r["search_blocks"]["B1"]["terms"], "mems, micro electro mechanical, microelectromechanical")
+        self.assertEqual(r["search_blocks"]["B2"]["terms"], "accelerometer*, accelerograph*")
+        self.assertIn("adxl35*", r["search_blocks"]["B3"]["terms"])
+        self.assertIn("silicon designs", r["search_blocks"]["B3"]["terms"])
+        self.assertIn("natural frequenc*", r["search_blocks"]["B4"]["terms"])
+        self.assertNotIn("refine", " ".join(b["terms"] for b in r["search_blocks"].values()))
+        self.assertEqual((r["year_from"], r["year_to"]), (2012, 2026))
+        self.assertEqual(r["doc_include"], "article, conference paper")
+        self.assertEqual(r["languages"], "english, spanish")
+        self.assertEqual(r["kw_exclude"], "")
+        self.assertFalse(any("distinto" in w for w in r["warnings"]), r["warnings"])
+
+    def test_user_queries_screen_records(self):
+        r = pc.parse_search_query(self.USER_QUERIES)
+        df = make_df({"WoS": [
+            {"title": "Low-noise MEMS accelerometer for ambient vibration of a footbridge", "year": 2020,
+             "doc_type": "Proceedings Paper", "language": "English"},
+            {"title": "Low-noise MEMS accelerometer for ambient vibration of a footbridge (Chinese ed.)", "year": 2021,
+             "doc_type": "Article", "language": "Chinese"},
+            {"title": "High-resolution MEMS accelerometers in heritage towers", "year": 2019,
+             "doc_type": "Review", "language": "Spanish"},
+            {"title": "ADXL355 accelerometer network for natural frequencies of bridges", "year": 2010,
+             "doc_type": "Article", "language": "English"},
+            {"title": "MEMS accelerometers: noise floor study for buildings", "year": 2022,
+             "doc_type": "Article", "language": ""},
+        ]})
+        cfg = {k: r[k] for k in ("search_blocks", "min_blocks", "kw_exclude", "year_from", "year_to",
+                                 "doc_include", "doc_exclude", "languages")}
+        out, steps = pc.run_screening(pc.deduplicate(df)[0], cfg)
+        st = out["Auto_Stage"].tolist()
+        self.assertEqual(out["Auto_Decision"].iloc[0], pc.INCLUDE)    # Proceedings Paper ≡ conference paper
+        self.assertEqual(st[1], pc.STAGE_LANG)
+        self.assertEqual(st[2], pc.STAGE_DOCTYPE)
+        self.assertEqual(st[3], pc.STAGE_YEAR)
+        self.assertEqual(st[4], pc.STAGE_BLOCKS)                       # sin término de bajo ruido; idioma vacío no excluye
+        self.assertEqual(steps["language"], 1)
+
+    def test_canon_lists(self):
+        self.assertEqual(pc.canon_list("Article; Proceedings Paper", "doctype"), ["article", "conference paper"])
+        self.assertEqual(pc.canon_list("eng; Español", "language"), ["english", "spanish"])
+        self.assertEqual(pc.canon_list("Editorial Material", "doctype"), ["editorial"])
+
+    def test_wos_inline_filters(self):
+        r = pc.parse_search_query('TS=(mems AND accelerometer*) AND DT=(Article OR Proceedings Paper) AND LA=(English)')
+        self.assertEqual(r["doc_include"], "article, conference paper")
+        self.assertEqual(r["languages"], "english")
+        self.assertEqual(len(r["search_blocks"]), 2)
 
     def test_wos(self):
         r = pc.parse_search_query('TS=("machine learning" OR "deep learning") AND TS=(education OR student*) AND PY=(2018-2025)')

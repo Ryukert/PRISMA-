@@ -116,6 +116,7 @@ BLANK_CONFIG = {
     "description": "",
     "year_from": "", "year_to": "",
     "kw_required": "", "kw_secondary": "", "kw_exclude": "", "doc_exclude": "",
+    "doc_include": "", "languages": "",
     "search_blocks": {"B1": {"label": "Bloque 1", "terms": ""}},
     "min_blocks": 1,
     "exclude_mode": "balanced", "missing_year": "review", "auto_plural": True, "review_near_miss": False,
@@ -133,6 +134,8 @@ PRESET_TEMPLATE = {
         "kw_secondary": "STRING — Términos SECUNDARIOS separados por coma.",
         "kw_exclude": "STRING — Términos de EXCLUSIÓN separados por coma.",
         "doc_exclude": "STRING — Tipos de documento a excluir (coincidencia exacta por tipo).",
+        "doc_include": "STRING — Tipos de documento PERMITIDOS (vacío = todos). Ej: Article, Proceedings Paper",
+        "languages": "STRING — Idiomas permitidos (vacío = todos). Ej: English, Spanish",
         "min_blocks": "INTEGER — Bloques mínimos que debe cumplir un artículo (0 = todos).",
         "search_blocks": "OBJECT — Bloques de la cadena de búsqueda {ID: {label, terms}}.",
         "exclude_mode": "STRING — strict | balanced | flag",
@@ -149,6 +152,8 @@ PRESET_TEMPLATE = {
     "kw_secondary": "tecnología 1, método 1, herramienta",
     "kw_exclude": "área a excluir 1, dominio irrelevante",
     "doc_exclude": "review, editorial, letter, note, book chapter",
+    "doc_include": "",
+    "languages": "English, Spanish",
     "min_blocks": 3,
     "exclude_mode": "balanced",
     "missing_year": "review",
@@ -163,7 +168,8 @@ PRESET_TEMPLATE = {
     "col_map": {},
 }
 
-_STRING_FIELDS = ["name", "description", "kw_required", "kw_secondary", "kw_exclude", "doc_exclude"]
+_STRING_FIELDS = ["name", "description", "kw_required", "kw_secondary", "kw_exclude", "doc_exclude",
+                  "doc_include", "languages"]
 
 
 def validate_preset_cfg(cfg) -> None:

@@ -388,8 +388,12 @@ class QueryImportDialog(ctk.CTkToplevel):
                        "Pega la cadena tal como la usaste en Scopus (TITLE-ABS-KEY…) o WoS (TS=…).")
         body = ctk.CTkFrame(self, fg_color=BG)
         body.pack(fill="both", expand=True, padx=18, pady=10)
-        self.query = ctk.CTkTextbox(body, height=150, font=("Consolas", 11), fg_color=SURFACE, border_color=BORDER,
-                                    border_width=1, text_color=TEXT)
+        ctk.CTkLabel(body, text="Puedes pegar varias cadenas juntas (p. ej. WoS y Scopus) y la línea «Refine:» de WoS. "
+                                "Se aplican bloques, AND NOT, años, tipos de documento (LIMIT-TO DOCTYPE / Document "
+                                "Types / DT=) e idiomas (LIMIT-TO LANGUAGE / Languages / LA=).",
+                     font=("Arial", 10), text_color="#1d4ed8", wraplength=800, justify="left").pack(anchor="w", pady=(0, 6))
+        self.query = ctk.CTkTextbox(body, height=200, font=("Consolas", 11), fg_color=SURFACE, border_color=BORDER,
+                                    border_width=1, text_color=TEXT, wrap="word")
         self.query.pack(fill="x")
         self.query.insert("1.0", 'TITLE-ABS-KEY ( ( "structural health monitoring" OR shm ) AND ( bridge* OR building* ) '
                                  'AND ( iot OR "wireless sensor network" ) AND NOT ( medical ) ) AND PUBYEAR > 2015')
@@ -415,11 +419,18 @@ class QueryImportDialog(ctk.CTkToplevel):
             messagebox.showerror("No se pudo analizar", str(e), parent=self)
             return
         r = self.result
-        lines = [f"Bloques detectados: {len(r['search_blocks'])}  (mínimo requerido = {r['min_blocks']}, todos por AND)", ""]
+        lines = []
+        if r.get("n_queries", 1) > 1:
+            lines += [f"Se detectaron {r['n_queries']} cadenas; sus bloques se combinaron por posición.", ""]
+        lines += [f"Bloques detectados: {len(r['search_blocks'])}  (mínimo requerido = {r['min_blocks']}, todos por AND)", ""]
         for bid, b in r["search_blocks"].items():
             lines += [f"  {bid}  {b['label']}", f"      {b['terms']}", ""]
         lines.append(f"Términos de exclusión (AND NOT): {r['kw_exclude'] or '—'}")
         lines.append(f"Años: {r['year_from'] or '…'} – {r['year_to'] or '…'}")
+        lines.append(f"Tipos de documento permitidos: {r['doc_include'] or 'todos'}")
+        if r["doc_exclude"]:
+            lines.append(f"Tipos de documento excluidos: {r['doc_exclude']}")
+        lines.append(f"Idiomas permitidos: {r['languages'] or 'todos'}")
         if r["warnings"]:
             lines += ["", "Advertencias:"] + [f"  ⚠ {w}" for w in r["warnings"]]
         self.preview.configure(state="normal")
@@ -669,6 +680,7 @@ class ReviewDialog(ctk.CTkToplevel):
         self.meta.pack(fill="x", padx=14, pady=(8, 4))
         self.meta_vals = {}
         for key, label in [("record_id", "ID"), ("year", "Año"), ("source", "Fuente"), ("doc_type", "Tipo"),
+                           ("language", "Idioma"),
                            ("auto", "Decisión automática"), ("Status", "Estado PRISMA")]:
             f = ctk.CTkFrame(self.meta, fg_color="transparent")
             f.pack(side="left", padx=12, pady=6)
@@ -777,7 +789,7 @@ class ReviewDialog(ctk.CTkToplevel):
         self.lbl_title.configure(text=str(r["title"])[:260] or "(sin título)")
         auto = r["Auto_Decision"]
         vals = {"record_id": r["record_id"], "year": fmt_year(r["year"]), "source": r["source"],
-                "doc_type": (r["doc_type"] or "—")[:28], "auto": DECISION_LABEL.get(auto, auto) or "—",
+                "doc_type": (r["doc_type"] or "—")[:28], "language": (r["language"] or "—")[:20], "auto": DECISION_LABEL.get(auto, auto) or "—",
                 "Status": r["Status"]}
         for k, v in vals.items():
             color = STATUS_STYLE.get(v, (None, ACCENT2))[1] if k == "Status" else ACCENT2
@@ -1204,7 +1216,7 @@ class SysReviewApp(ctk.CTk):
         pairs = [("title", "Title / Article Title"), ("year", "Year / Publication Year"), ("abstract", "Abstract"),
                  ("doi", "DOI"), ("doc_type", "Document Type"), ("authors", "Authors"),
                  ("keywords", "Author Keywords"), ("index_keywords", "Index Keywords / Keywords Plus"),
-                 ("journal", "Source title")]
+                 ("journal", "Source title"), ("language", "Language of Original Document / Language")]
         for i in range(0, len(pairs), 3):
             row = ctk.CTkFrame(map_card, fg_color="transparent")
             row.pack(fill="x", pady=2)
@@ -1483,9 +1495,16 @@ class SysReviewApp(ctk.CTk):
         ctk.CTkOptionMenu(exc_row, values=list(pc.EXCLUDE_MODES.values()), variable=self.exclude_mode_var, width=430,
                           font=("Arial", 10), fg_color=SURFACE2, button_color=SURFACE3, button_hover_color=BORDER,
                           text_color=TEXT).pack(side="left", padx=6)
-        self.doc_exclude = _textarea(cfg, "🚫 Tipos de documento a excluir (coincidencia exacta por tipo)", 48, MUTED2)
+        self.doc_include = _textarea(cfg, "✅ Tipos de documento PERMITIDOS — vacío = todos (ej. Article, Proceedings Paper)",
+                                     40, TEAL)
+        Tooltip(self.doc_include, "Solo pasan estos tipos. 'Proceedings Paper' (WoS) y 'Conference Paper' (Scopus) "
+                                  "se consideran el mismo tipo. Registros sin tipo no se excluyen.")
+        self.doc_exclude = _textarea(cfg, "🚫 Tipos de documento a excluir (coincidencia exacta por tipo)", 40, MUTED2)
         Tooltip(self.doc_exclude, "Se compara cada tipo por separado: 'Article; Proceedings Paper' se excluye si "
                                   "'proceedings paper' está en la lista, pero 'review' no excluye 'Article'.")
+        self.languages = _textarea(cfg, "🌐 Idiomas permitidos — vacío = todos (ej. English, Spanish)", 36, CYAN)
+        Tooltip(self.languages, "Se usa la columna de idioma de la exportación (Scopus: 'Language of Original "
+                                "Document'; WoS: 'Language'). Acepta English/Inglés/eng. Registros sin idioma no se excluyen.")
 
         blk_hdr = ctk.CTkFrame(cfg, fg_color="transparent")
         blk_hdr.pack(fill="x", pady=(10, 2))
@@ -1513,7 +1532,7 @@ class SysReviewApp(ctk.CTk):
         pipe_card = _card_frame(right_col, "RESULTADO DEL CRIBADO AUTOMÁTICO")
         self.cribar_steps = {}
         for key, name in [("input", "Registros únicos a cribar"), ("year", "Filtro de año"),
-                          ("doc_type", "Tipo de documento"), ("required", "Bloque obligatorio"),
+                          ("doc_type", "Tipo de documento"), ("language", "Idioma"), ("required", "Bloque obligatorio"),
                           ("secondary", "Bloque secundario"), ("exclude", "Términos de exclusión"),
                           ("blocks", "Bloques de búsqueda"), ("result", "Resultado")]:
             row = ctk.CTkFrame(pipe_card, fg_color=SURFACE2, corner_radius=8)
@@ -1595,8 +1614,30 @@ class SysReviewApp(ctk.CTk):
         if r["kw_exclude"]:
             merged = pc.parse_terms(_get_text(self.kw_exclude)) + pc.parse_terms(r["kw_exclude"])
             _set_text(self.kw_exclude, ", ".join(dict.fromkeys(merged)))
+        msg = f"Se aplicaron {len(r['search_blocks'])} bloques"
+        if r["year_from"] or r["year_to"]:
+            msg += f", años {r['year_from'] or '…'}–{r['year_to'] or '…'}"
+        if r["languages"]:
+            _set_text(self.languages, r["languages"])
+            msg += f", idiomas: {r['languages']}"
+        if r["doc_include"]:
+            _set_text(self.doc_include, r["doc_include"])
+            msg += f", tipos: {r['doc_include']}"
+            # Quita de 'excluir' los tipos que la cadena permite explícitamente (evita contradicciones)
+            allowed = set(pc.canon_list(r["doc_include"], "doctype"))
+            current = pc.canon_list(_get_text(self.doc_exclude), "doctype")
+            removed = [t for t in current if t in allowed]
+            if removed:
+                _set_text(self.doc_exclude, ", ".join(t for t in current if t not in allowed))
+                msg += f".\nSe quitaron de 'tipos a excluir' porque la cadena los permite: {', '.join(removed)}"
+        if r["doc_exclude"]:
+            merged = pc.canon_list(_get_text(self.doc_exclude), "doctype") + pc.canon_list(r["doc_exclude"], "doctype")
+            _set_text(self.doc_exclude, ", ".join(dict.fromkeys(merged)))
         self._mark_dirty()
-        msg = f"Se aplicaron {len(r['search_blocks'])} bloques."
+        msg += "."
+        if _get_text(self.kw_required) or _get_text(self.kw_secondary):
+            msg += ("\n\nOjo: los campos 'Bloque OBLIGATORIO' y 'Bloque SECUNDARIO' siguen con términos del preset "
+                    "y también se aplicarán. Vacíalos si solo quieres usar los criterios de tu cadena.")
         if r["warnings"]:
             msg += "\n\n" + "\n".join("⚠ " + w for w in r["warnings"])
         messagebox.showinfo("Cadena importada", msg, parent=self)
@@ -1618,6 +1659,8 @@ class SysReviewApp(ctk.CTk):
             "kw_secondary": _get_text(self.kw_secondary),
             "kw_exclude": _get_text(self.kw_exclude),
             "doc_exclude": _get_text(self.doc_exclude),
+            "doc_include": _get_text(self.doc_include),
+            "languages": _get_text(self.languages),
             "search_blocks": {k: dict(v) for k, v in self._search_blocks.items()},
             "min_blocks": mb,
             "exclude_mode": inv_exc.get(self.exclude_mode_var.get(), "balanced"),
@@ -1654,7 +1697,7 @@ class SysReviewApp(ctk.CTk):
                       f"✓ Únicos cribados: {steps['input']}\n"
                       f"✓ Año: −{steps['year_out']} fuera de rango, −{steps['year_missing_excluded']} sin año, "
                       f"{steps['year_missing_review']} sin año → revisión\n"
-                      f"✓ Tipo de documento: −{steps['doc_type']}\n"
+                      f"✓ Tipo de documento: −{steps['doc_type']}   Idioma: −{steps['language']}\n"
                       f"✓ Bloque obligatorio: −{steps['required']}   Secundario: −{steps['secondary']}\n"
                       f"✓ Exclusión: −{steps['exclude_terms']}   → revisión: {steps['exclude_review']}\n"
                       f"✓ Bloques: −{steps['blocks']}   casi cumplen → revisión: {steps['near_miss_review']}\n"
@@ -1678,6 +1721,7 @@ class SysReviewApp(ctk.CTk):
                      f"−{s['year_out']} fuera de rango · −{s['year_missing_excluded']} sin año · "
                      f"{s['year_missing_review']} sin año → revisión"),
             "doc_type": (s["doc_type"], f"−{s['doc_type']}"),
+            "language": (s.get("language", 0), f"−{s.get('language', 0)}"),
             "required": (s["required"], f"−{s['required']}"),
             "secondary": (s["secondary"], f"−{s['secondary']}"),
             "exclude": (s["exclude_terms"], f"−{s['exclude_terms']} · {s['exclude_review']} → revisión"),
@@ -1688,8 +1732,8 @@ class SysReviewApp(ctk.CTk):
             dot, val = self.cribar_steps[key]
             dot.configure(fg_color=ACCENT2 if key in ("input", "result") else (ORANGE if n else GREEN))
             val.configure(text=text, text_color=TEXT)
-        auto_exc = sum(s[k] for k in ("year_out", "year_missing_excluded", "doc_type", "required", "secondary",
-                                      "exclude_terms", "blocks"))
+        auto_exc = sum(s.get(k, 0) for k in ("year_out", "year_missing_excluded", "doc_type", "language", "required",
+                                             "secondary", "exclude_terms", "blocks"))
         self.cribar_cards["auto_exc"].configure(text=str(auto_exc))
         self.cribar_cards["review"].configure(text=str(s["review"]))
         self.cribar_cards["include"].configure(text=str(s["include"]))
@@ -2032,7 +2076,7 @@ class SysReviewApp(ctk.CTk):
         put(self.year_from, full.get("year_from"))
         put(self.year_to, full.get("year_to"))
         put(self.min_blocks_entry, full.get("min_blocks", 0))
-        for field in ("kw_required", "kw_secondary", "kw_exclude", "doc_exclude"):
+        for field in ("kw_required", "kw_secondary", "kw_exclude", "doc_exclude", "doc_include", "languages"):
             _set_text(getattr(self, field), full.get(field, ""))
         self._search_blocks = {k: dict(v) for k, v in (full.get("search_blocks") or {}).items()} or \
             dict(BLANK_CONFIG["search_blocks"])
