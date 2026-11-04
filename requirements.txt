@@ -1,0 +1,10 @@
+# Obligatorias
+customtkinter>=5.2
+pandas>=2.1
+openpyxl>=3.1
+pillow>=10.1          # exportar el diagrama PRISMA a PNG
+
+# Opcionales (la app funciona sin ellas)
+xlrd>=2.0.1           # leer archivos .xls antiguos de WoS
+rapidfuzz>=3.0        # deduplicación por títulos similares mucho más rápida
+pytest>=8.0           # correr las pruebas con pytest (también funcionan con unittest)
