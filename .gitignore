@@ -4,5 +4,12 @@ __pycache__/
 .claude/
 # Proyectos y exportaciones con datos de búsqueda
 *.prisma
+*.xls
+*.xlsx
+*.csv
+*.ris
+*.bib
+*.nbib
+savedrecs*
 *_config.json
 *.bak-*
