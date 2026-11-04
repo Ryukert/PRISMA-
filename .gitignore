@@ -11,5 +11,10 @@ __pycache__/
 *.bib
 *.nbib
 savedrecs*
+# Resultados generados (diagramas, informes)
+PRISMA_*.png
+PRISMA_*.svg
+PRISMA_*.txt
+Cribado_*
 *_config.json
 *.bak-*

@@ -288,6 +288,12 @@ class TestQueryParser(unittest.TestCase):
         self.assertEqual(st[4], pc.STAGE_BLOCKS)                       # sin término de bajo ruido; idioma vacío no excluye
         self.assertEqual(steps["language"], 1)
 
+    def test_invisible_characters(self):
+        q = "﻿TITLE-ABS-KEY(​mems OR microelectromechanical) AND (accelerometer*)"
+        r = pc.parse_search_query(q)
+        self.assertEqual(list(r["search_blocks"]), ["B1", "B2"])
+        self.assertEqual(r["search_blocks"]["B1"]["terms"], "mems, microelectromechanical")
+
     def test_canon_lists(self):
         self.assertEqual(pc.canon_list("Article; Proceedings Paper", "doctype"), ["article", "conference paper"])
         self.assertEqual(pc.canon_list("eng; Español", "language"), ["english", "spanish"])
@@ -423,6 +429,15 @@ class TestPresets(unittest.TestCase):
         for cfg in pp.DEFAULT_PRESETS.values():
             pp.validate_preset_cfg(cfg)
         pp.validate_preset_cfg(pp.PRESET_TEMPLATE)
+
+    def test_mems_preset_matches_query(self):
+        """El preset MEMS debe ser idéntico a lo que produce su propia cadena."""
+        p = pp.DEFAULT_PRESETS["MEMS de bajo ruido — SHM (cadena Scopus)"]
+        r = pc.parse_search_query(p["search_query"])
+        self.assertEqual([b["terms"] for b in r["search_blocks"].values()],
+                         [b["terms"] for b in p["search_blocks"].values()])
+        self.assertEqual((r["year_from"], r["doc_include"], r["languages"], r["min_blocks"]),
+                         (p["year_from"], p["doc_include"], p["languages"], p["min_blocks"]))
 
     def test_invalid(self):
         with self.assertRaises(ValueError):

@@ -12,7 +12,44 @@ from prisma_core import EXCLUDE_MODES, MISSING_YEAR_MODES
 
 PRESETS_FILE = Path.home() / ".sysreview_presets_v2.json"   # mismo archivo que v2 → se conservan presets
 
+MEMS_QUERY = (
+    'TITLE-ABS-KEY ( ( mems OR "micro-electro-mechanical" OR microelectromechanical ) AND ( accelerometer* OR '
+    'accelerograph* ) AND ( "low-noise" OR "low noise" OR "ultra-low noise" OR "high-resolution" OR adxl35* OR '
+    'adxl1002 OR iis3dwb OR sf1500 OR sf1600 OR "Silicon Designs" ) AND ( "structural health monitoring" OR shm OR '
+    '"modal identification" OR "operational modal analysis" OR "ambient vibration" OR "natural frequenc*" OR '
+    '"dynamic characteri*" OR "system identification" OR building* OR bridge* OR tower* OR "civil structure*" OR '
+    '"civil infrastructure" OR "shake table" OR footbridge* OR heritage ) ) AND PUBYEAR > 2011 AND ( LIMIT-TO ( '
+    'DOCTYPE , "ar" ) OR LIMIT-TO ( DOCTYPE , "cp" ) ) AND ( LIMIT-TO ( LANGUAGE , "English" ) OR LIMIT-TO ( '
+    'LANGUAGE , "Spanish" ) )'
+)
+
 DEFAULT_PRESETS = {
+    "MEMS de bajo ruido — SHM (cadena Scopus)": {
+        "description": "Acelerómetros MEMS de bajo ruido / alta resolución para monitoreo estructural",
+        "search_query": MEMS_QUERY,
+        "year_from": 2012, "year_to": None,
+        "kw_required": "", "kw_secondary": "", "kw_exclude": "",
+        "doc_include": "article, conference paper",
+        "doc_exclude": "",
+        "languages": "english, spanish",
+        "search_blocks": {
+            "B1": {"label": "Bloque 1 — MEMS",
+                   "terms": "mems, micro electro mechanical, microelectromechanical"},
+            "B2": {"label": "Bloque 2 — Acelerómetro",
+                   "terms": "accelerometer*, accelerograph*"},
+            "B3": {"label": "Bloque 3 — Bajo ruido / alta resolución",
+                   "terms": "low noise, ultra low noise, high resolution, adxl35*, adxl1002, iis3dwb, sf1500, "
+                            "sf1600, silicon designs"},
+            "B4": {"label": "Bloque 4 — Aplicación estructural",
+                   "terms": "structural health monitoring, shm, modal identification, operational modal analysis, "
+                            "ambient vibration, natural frequenc*, dynamic characteri*, system identification, "
+                            "building*, bridge*, tower*, civil structure*, civil infrastructure, shake table, "
+                            "footbridge*, heritage"},
+        },
+        "min_blocks": 4,
+        "exclude_mode": "balanced", "missing_year": "review", "auto_plural": True,
+        "review_near_miss": True,   # 3 de 4 bloques → revisión manual (p. ej. exportaciones sin keywords)
+    },
     "SHM — Monitoreo Estructural": {
         "description": "Structural Health Monitoring con IoT/MEMS",
         "year_from": 2016, "year_to": 2026,
@@ -184,6 +221,8 @@ def validate_preset_cfg(cfg) -> None:
     for name, v in (("year_from", yf), ("year_to", yt)):
         if v not in (None, "") and (not isinstance(v, int) or isinstance(v, bool)):
             errors.append(f"'{name}' debe ser entero, no '{v}'")
+    if "search_query" in cfg and not isinstance(cfg["search_query"], str):
+        errors.append("'search_query' debe ser texto")
     if isinstance(yf, int) and isinstance(yt, int) and yf > yt:
         errors.append(f"'year_from' ({yf}) debe ser ≤ 'year_to' ({yt})")
     mb = cfg.get("min_blocks")

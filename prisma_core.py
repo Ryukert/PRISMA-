@@ -119,6 +119,7 @@ _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 _WS = re.compile(r"\s+")
 _ILLEGAL_XML = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 _DOI_RE = re.compile(r"10\.\d{4,9}/\S+")
+_INVISIBLE = re.compile(r"[﻿​‌‍⁠­]")
 _TITLE_NUMBERS = re.compile(r"\b(?:\d+|[ivxlc]+)\b")
 
 
@@ -130,7 +131,7 @@ def normalize_text(s) -> str:
     """Minúsculas, sin acentos, guiones/barras → espacio, espacios colapsados."""
     if s is None or (isinstance(s, float) and pd.isna(s)):
         return ""
-    s = strip_accents(str(s)).lower()
+    s = _INVISIBLE.sub("", strip_accents(str(s))).lower()
     s = _SEPARATORS.sub(" ", s)
     return _WS.sub(" ", s).strip()
 
@@ -172,6 +173,8 @@ def parse_terms(value) -> list[str]:
     out, seen = [], set()
     for p in parts:
         t = normalize_text(p).strip(" \"'{}")
+        if not re.search(r"[a-z0-9]", t):      # descarta restos invisibles (BOM, espacios de ancho cero…)
+            continue
         if t and t not in seen:
             seen.add(t)
             out.append(t)
@@ -1526,6 +1529,7 @@ def split_queries(text: str) -> list[str]:
     """
     t = (text.replace("“", '"').replace("”", '"').replace("’", "'")
          .replace("‘", "'").replace('""', "\n"))
+    t = _INVISIBLE.sub("", t).replace(chr(0xA0), " ")   # BOM, ancho cero y espacio duro de Word/web
     queries, cur, depth = [], [], 0
     for line in t.splitlines():
         s = line.strip()
