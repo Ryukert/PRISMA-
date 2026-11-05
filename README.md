@@ -90,6 +90,22 @@ automáticamente puede **rescatarse** marcándolo como *Incluir* o *Dudoso*.
 3. *Importar 2º revisor (κ)* calcula acuerdo observado, κ de Cohen (Landis & Koch) y permite
    exportar los desacuerdos.
 
+## Carpeta de resultados
+
+Todo lo que genera el programa se guarda **automáticamente** en una sola carpeta, sin preguntar
+dónde: Excel, CSV, RIS, diagramas, informes, hoja del 2º revisor, desacuerdos, plantillas y el
+proyecto `.prisma`.
+
+- En la barra lateral, **📁 Carpeta de resultados**: escribe el nombre que quieras (por defecto, el
+  nombre de la revisión).
+- **Cambiar ubicación…** elige dónde se crea (por defecto `Documentos\SysReview PRISMA`); se recuerda
+  para la próxima vez. **Abrir** la muestra en el Explorador.
+- Nunca se sobrescribe un archivo: si ya existe se guarda como `nombre (2).xlsx`, `(3)`…
+  (excepto el proyecto `.prisma`, que `Ctrl+S` actualiza).
+- Al abrir un proyecto `.prisma` se usa la carpeta donde está guardado.
+
+Si ocurre un error, la app lo muestra y lo guarda en `~/.sysreview_errores.log`.
+
 ## Exportaciones y reproducibilidad
 
 - **Excel completo**: hojas Resumen_PRISMA, Incluidos, Pendientes, Excluidos (texto completo,

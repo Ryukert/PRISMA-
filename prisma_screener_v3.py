@@ -82,7 +82,61 @@ FILE_TYPES = [("Exportaciones bibliográficas", " ".join(f"*{e}" for e in pc.SUP
 
 
 def safe_name(s: str) -> str:
-    return re.sub(r"[^\w\-]+", "_", s.strip())[:60] or "revision"
+    return re.sub(r"[^\w\-]+", "_", s.strip())[:60].strip("_") or "revision"
+
+
+def safe_folder_name(s: str) -> str:
+    """Nombre de carpeta válido en Windows (conserva espacios y acentos)."""
+    s = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", (s or "").strip()).rstrip(". ")
+    return s[:80] or "Revision"
+
+
+SETTINGS_FILE = Path.home() / ".sysreview_settings.json"
+ERROR_LOG = Path.home() / ".sysreview_errores.log"
+
+
+def load_settings() -> dict:
+    try:
+        import json
+        return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_settings(data: dict) -> None:
+    try:
+        import json
+        SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def default_output_base() -> Path:
+    docs = Path.home() / "Documents"
+    return (docs if docs.exists() else Path.home()) / "SysReview PRISMA"
+
+
+def find_app(widget):
+    """Sube por la jerarquía de ventanas hasta la aplicación principal."""
+    w = widget
+    while w is not None and not isinstance(w, SysReviewApp):
+        w = getattr(w, "master", None)
+    return w
+
+
+def open_folder(path) -> None:
+    import os
+    import subprocess
+    import sys
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(str(path))  # noqa: S606
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+    except OSError:
+        pass
 
 
 def fmt_year(y) -> str:
@@ -470,13 +524,10 @@ def _load_json_preset(parent):
 
 def _save_template(parent):
     import json
-    path = filedialog.asksaveasfilename(title="Guardar plantilla", defaultextension=".json",
-                                        initialfile="plantilla_revision_prisma", filetypes=[("JSON", "*.json")],
-                                        parent=parent)
-    if path:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(PRESET_TEMPLATE, f, ensure_ascii=False, indent=2)
-        messagebox.showinfo("Plantilla guardada", f"Guardada en:\n{path}", parent=parent)
+    app = find_app(parent)
+    app.save_output("plantilla_revision_prisma.json",
+                    lambda p: Path(p).write_text(json.dumps(PRESET_TEMPLATE, ensure_ascii=False, indent=2),
+                                                 encoding="utf-8"), parent=parent)
 
 
 class PresetDialog(ctk.CTkToplevel):
@@ -569,13 +620,9 @@ class PresetDialog(ctk.CTkToplevel):
 
     def _export_current_json(self):
         import json
-        path = filedialog.asksaveasfilename(title="Exportar configuración actual", defaultextension=".json",
-                                            initialfile=safe_name(self.current_cfg.get("name", "mi_revision")),
-                                            filetypes=[("JSON", "*.json")], parent=self)
-        if path:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(self.current_cfg, f, ensure_ascii=False, indent=2)
-            messagebox.showinfo("Exportado", f"Guardado en:\n{path}", parent=self)
+        name = f"Configuracion_{safe_name(self.current_cfg.get('name', 'mi_revision'))}.json"
+        find_app(self).save_output(name, lambda p: Path(p).write_text(
+            json.dumps(self.current_cfg, ensure_ascii=False, indent=2), encoding="utf-8"), parent=self)
 
 
 class WelcomeDialog(ctk.CTkToplevel):
@@ -926,11 +973,8 @@ class KappaDialog(ctk.CTkToplevel):
         if self.res["disagreements"].empty:
             messagebox.showinfo("Sin desacuerdos", "No hay desacuerdos que exportar.", parent=self)
             return
-        path = filedialog.asksaveasfilename(defaultextension=".xlsx", initialfile="Desacuerdos_revisores",
-                                            filetypes=[("Excel", "*.xlsx")], parent=self)
-        if path:
-            self.res["disagreements"].map(pc.clean_cell).to_excel(path, index=False)
-            messagebox.showinfo("Guardado", f"Guardado en:\n{path}", parent=self)
+        find_app(self).save_output("Desacuerdos_revisores.xlsx", lambda p: self.res["disagreements"].map(
+            pc.clean_cell).to_excel(p, index=False), parent=self)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -981,10 +1025,8 @@ class PrismaReportDialog(ctk.CTkToplevel):
         _ghost_button(btn_row, "🖼 Exportar PNG", ACCENT2, self._save_png).pack(side="left", padx=4)
         make_modal(self, parent)
 
-    def _ask(self, ext, kind):
-        return filedialog.asksaveasfilename(defaultextension=ext, parent=self,
-                                            initialfile=f"PRISMA_{safe_name(self.review_name)}",
-                                            filetypes=[(kind, f"*{ext}")])
+    def _file_name(self, ext):   # (no usar «_name»: es un atributo interno de Tk)
+        return f"PRISMA_{safe_name(self.review_name)}{ext}"
 
     def _copy(self):
         self.clipboard_clear()
@@ -992,28 +1034,23 @@ class PrismaReportDialog(ctk.CTkToplevel):
         messagebox.showinfo("Copiado", "Informe copiado al portapapeles.", parent=self)
 
     def _save_txt(self):
-        path = self._ask(".txt", "Texto")
-        if path:
-            Path(path).write_text(self.text, encoding="utf-8")
-            pc.write_sidecar(path, self.cfg, self.prov, self.counts)
-            messagebox.showinfo("Guardado", f"Informe guardado en:\n{path}", parent=self)
+        def write(p):
+            Path(p).write_text(self.text, encoding="utf-8")
+            pc.write_sidecar(p, self.cfg, self.prov, self.counts)
+        find_app(self).save_output(self._file_name(".txt"), write, parent=self)
 
     def _save_svg(self):
-        path = self._ask(".svg", "SVG")
-        if path:
-            Path(path).write_text(pc.layout_to_svg(self.layout), encoding="utf-8")
-            messagebox.showinfo("Guardado", f"Diagrama guardado en:\n{path}", parent=self)
+        find_app(self).save_output(self._file_name(".svg"), lambda p: Path(p).write_text(
+            pc.layout_to_svg(self.layout), encoding="utf-8"), parent=self)
 
     def _save_png(self):
-        path = self._ask(".png", "PNG")
-        if not path:
-            return
         try:
-            pc.layout_to_png(self.layout, path)
-            messagebox.showinfo("Guardado", f"Diagrama guardado en:\n{path}", parent=self)
+            import PIL  # noqa: F401
         except ImportError:
             messagebox.showerror("Falta Pillow", "Para exportar PNG instala Pillow:\n  pip install pillow\n\n"
                                  "Mientras tanto puedes usar la exportación SVG.", parent=self)
+            return
+        find_app(self).save_output(self._file_name(".png"), lambda p: pc.layout_to_png(self.layout, p), parent=self)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1043,8 +1080,12 @@ class SysReviewApp(ctk.CTk):
         self._dirty = False
         self._session_path = None
         self._uiq: queue.Queue = queue.Queue()
+        self._settings = load_settings()
+        self.output_base = Path(self._settings.get("output_base") or default_output_base())
+        self._out_name_custom = False
 
         self._build_ui()
+        self.review_name.trace_add("write", lambda *_: self._sync_out_name())
         self._apply_preset("Nueva revisión", dict(BLANK_CONFIG), mark_dirty=False)
         self._update_state()
         self.after(40, self._drain_ui)
@@ -1057,6 +1098,89 @@ class SysReviewApp(ctk.CTk):
     # ══════════════════════════════════════════════════════════════════════════
     # Hilos: los trabajos pesados corren en segundo plano y SOLO el hilo principal toca Tk
     # ══════════════════════════════════════════════════════════════════════════
+    def report_callback_exception(self, exc, val, tb):
+        """Cualquier error de la interfaz se muestra y se guarda en un archivo (no se pierde en silencio)."""
+        text = "".join(traceback.format_exception(exc, val, tb))
+        self._log_error(text)
+        messagebox.showerror("Error inesperado", f"{val}\n\nEl detalle se guardó en:\n{ERROR_LOG}\n\n"
+                             "Envía ese archivo si el problema continúa.", parent=self)
+
+    @staticmethod
+    def _log_error(text):
+        from datetime import datetime
+        try:
+            with open(ERROR_LOG, "a", encoding="utf-8") as f:
+                f.write(f"\n===== {datetime.now():%Y-%m-%d %H:%M:%S} · v{pc.APP_VERSION} =====\n{text}")
+        except OSError:
+            pass
+
+    # ── Carpeta de resultados ────────────────────────────────────────────────
+    def output_folder(self) -> Path:
+        name = safe_folder_name(self.out_name_var.get() or self.review_name.get())
+        folder = self.output_base / name
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def _out_path(self, filename: str) -> Path:
+        """Ruta dentro de la carpeta de resultados; si el archivo ya existe agrega (2), (3)… (no sobrescribe)."""
+        folder = self.output_folder()
+        p = folder / filename
+        n = 2
+        while p.exists():
+            p = folder / f"{Path(filename).stem} ({n}){Path(filename).suffix}"
+            n += 1
+        return p
+
+    def save_output(self, filename: str, writer, parent=None) -> Path | None:
+        """Guarda un archivo generado en la carpeta de resultados y ofrece abrirla."""
+        parent = parent or self
+        try:
+            path = self._out_path(filename)
+            writer(path)
+        except PermissionError as e:
+            messagebox.showerror("No se pudo guardar", f"Sin permiso o archivo abierto en otro programa:\n{e}",
+                                 parent=parent)
+            return None
+        except Exception as e:
+            self._log_error(traceback.format_exc())
+            messagebox.showerror("Error al guardar", f"{e}", parent=parent)
+            return None
+        extra = ""
+        side = path.with_name(path.stem + "_config.json")
+        if side.exists():
+            extra = f"\n+ {side.name} (configuración y procedencia)"
+        if messagebox.askyesno("Guardado", f"Se guardó en la carpeta de resultados:\n\n{path.name}{extra}\n\n"
+                               f"{path.parent}\n\n¿Abrir la carpeta?", parent=parent):
+            open_folder(path.parent)
+        return path
+
+    def _sync_out_name(self):
+        if not self._out_name_custom and hasattr(self, "out_name_var"):
+            self.out_name_var.set(safe_folder_name(self.review_name.get()))
+        self._refresh_out_label()
+
+    def _on_out_name_edit(self):
+        self._out_name_custom = True
+        self._refresh_out_label()
+        self._mark_dirty()
+
+    def _refresh_out_label(self):
+        if hasattr(self, "lbl_out_path"):
+            name = safe_folder_name(self.out_name_var.get() or self.review_name.get())
+            self.lbl_out_path.configure(text=str(self.output_base / name))
+
+    def _choose_out_base(self):
+        d = filedialog.askdirectory(title="¿Dónde crear la carpeta de resultados?", initialdir=str(self.output_base),
+                                    parent=self)
+        if d:
+            self.output_base = Path(d)
+            self._settings["output_base"] = str(self.output_base)
+            save_settings(self._settings)
+            self._refresh_out_label()
+
+    def _open_out_folder(self):
+        open_folder(self.output_folder())
+
     def _post(self, fn, *args):
         self._uiq.put((fn, args))
 
@@ -1140,7 +1264,7 @@ class SysReviewApp(ctk.CTk):
             ("3", "Cribado automático", "🔬", "Años, tipos, keywords y bloques de la cadena"),
             ("4", "Revisión y resultados", "📊", "Revisión manual, segundo revisor y exportación"),
         ]:
-            btn = ctk.CTkButton(sidebar, text=f"  {icon}  Paso {num} — {label}", anchor="w", height=46,
+            btn = ctk.CTkButton(sidebar, text=f"  {icon}  Paso {num} — {label}", anchor="w", height=40,
                                 fg_color="transparent", hover_color=SURFACE2, font=("Arial", 12), text_color=MUTED,
                                 corner_radius=10, command=lambda n=int(num) - 1: self._show_tab(n))
             btn.pack(fill="x", padx=8, pady=2)
@@ -1151,12 +1275,12 @@ class SysReviewApp(ctk.CTk):
         self.sidebar_stats = {}
         for key, label, color in [("total", "Identificados", MUTED2), ("unique", "Únicos", ACCENT2),
                                   ("pending", "Pendientes", YELLOW), ("included", "Incluidos ✓", GREEN)]:
-            row = ctk.CTkFrame(sidebar, fg_color=SURFACE2, corner_radius=8, height=46)
+            row = ctk.CTkFrame(sidebar, fg_color=SURFACE2, corner_radius=8, height=38)
             row.pack(fill="x", padx=8, pady=2)
             row.pack_propagate(False)
             var = tk.StringVar(value="—")
             self.sidebar_stats[key] = var
-            ctk.CTkLabel(row, textvariable=var, font=("Arial Black", 17), text_color=color).pack(side="right", padx=12)
+            ctk.CTkLabel(row, textvariable=var, font=("Arial Black", 15), text_color=color).pack(side="right", padx=12)
             ctk.CTkLabel(row, text=label, font=("Courier", 10), text_color=MUTED, anchor="w").pack(side="left", padx=10)
         ctk.CTkFrame(sidebar, fg_color=BORDER, height=1).pack(fill="x", padx=16, pady=14)
         ctk.CTkLabel(sidebar, text="PROGRESO", font=("Courier", 10), text_color=MUTED).pack(anchor="w", padx=18, pady=(0, 6))
@@ -1168,7 +1292,27 @@ class SysReviewApp(ctk.CTk):
                                          justify="left", anchor="w", wraplength=215)
         self.lbl_progress.pack(anchor="w", padx=14, pady=4)
         self.lbl_dirty = ctk.CTkLabel(sidebar, text="", font=("Courier", 9), text_color=ORANGE)
-        self.lbl_dirty.pack(anchor="w", padx=14, side="bottom", pady=10)
+        self.lbl_dirty.pack(anchor="w", padx=14, side="bottom", pady=(2, 8))
+
+        out = ctk.CTkFrame(sidebar, fg_color=SURFACE2, corner_radius=10)
+        out.pack(side="bottom", fill="x", padx=8, pady=(0, 2))
+        ctk.CTkLabel(out, text="📁 CARPETA DE RESULTADOS", font=("Courier", 10), text_color=MUTED).pack(
+            anchor="w", padx=10, pady=(8, 2))
+        self.out_name_var = tk.StringVar()
+        out_entry = ctk.CTkEntry(out, textvariable=self.out_name_var, height=28, font=("Arial", 11), fg_color=SURFACE,
+                                 border_color=BORDER, text_color=TEXT, placeholder_text="Nombre de la carpeta")
+        out_entry.pack(fill="x", padx=8)
+        out_entry.bind("<KeyRelease>", lambda _e: self._on_out_name_edit())
+        Tooltip(out_entry, "Todos los archivos que genera el programa (Excel, CSV, RIS, diagramas, informes, "
+                           "proyecto .prisma…) se guardan en esta carpeta. Escribe el nombre que quieras.")
+        self.lbl_out_path = ctk.CTkLabel(out, text="", font=("Arial", 9), text_color=MUTED2, wraplength=215,
+                                         justify="left", anchor="w")
+        self.lbl_out_path.pack(anchor="w", fill="x", padx=10, pady=(3, 2))
+        brow = ctk.CTkFrame(out, fg_color="transparent")
+        brow.pack(fill="x", padx=8, pady=(0, 8))
+        _ghost_button(brow, "Cambiar ubicación…", MUTED2, self._choose_out_base, height=26).pack(
+            side="left", fill="x", expand=True, padx=(0, 4))
+        _ghost_button(brow, "Abrir", ACCENT2, self._open_out_folder, height=26, width=60).pack(side="left")
 
         self._content = ctk.CTkFrame(main_row, fg_color=BG, corner_radius=0)
         self._content.pack(side="left", fill="both", expand=True)
@@ -2152,22 +2296,26 @@ class SysReviewApp(ctk.CTk):
         except ValueError as e:
             messagebox.showerror("Configuración inválida", str(e), parent=self)
             return False
-        path = self._session_path
-        if ask or not path:
-            path = filedialog.asksaveasfilename(title="Guardar proyecto", defaultextension=".prisma",
-                                                initialfile=safe_name(self.review_name.get()),
-                                                filetypes=[("Proyecto SysReview", "*.prisma")], parent=self)
-            if not path:
-                return False
+        # El proyecto vive en la carpeta de resultados; volver a guardar actualiza el mismo archivo.
         try:
+            path = self.output_folder() / f"{safe_name(self.review_name.get())}.prisma"
             pc.save_session(path, self.df, cfg, self.review_name.get(), self.sources_info, self.dedup_stats,
-                            {"last_steps": self.last_steps, "last_cfg": self._last_cfg})
+                            {"last_steps": self.last_steps, "last_cfg": self._last_cfg,
+                             "output_name": self.out_name_var.get(), "output_custom": self._out_name_custom,
+                             "output_base": str(self.output_base)})
         except Exception as e:
+            self._log_error(traceback.format_exc())
             messagebox.showerror("Error al guardar", str(e), parent=self)
             return False
-        self._session_path = path
+        first_time = self._session_path != str(path)
+        self._session_path = str(path)
         self._mark_dirty(False)
-        self.title(f"SysReview PRISMA  v{pc.APP_VERSION}  ·  {Path(path).name}")
+        self.title(f"SysReview PRISMA  v{pc.APP_VERSION}  ·  {path.name}")
+        if first_time or ask:
+            if messagebox.askyesno("Proyecto guardado", f"Proyecto guardado en la carpeta de resultados:\n\n"
+                                   f"{path.name}\n{path.parent}\n\n(Ctrl+S vuelve a guardar en el mismo archivo.)\n\n"
+                                   "¿Abrir la carpeta?", parent=self):
+                open_folder(path.parent)
         return True
 
     def _open_session(self, parent=None):
@@ -2178,7 +2326,8 @@ class SysReviewApp(ctk.CTk):
             if ans is None or (ans and not self._save_session()):
                 return False
         path = filedialog.askopenfilename(title="Abrir proyecto", filetypes=[("Proyecto SysReview", "*.prisma"),
-                                                                             ("Todos", "*.*")], parent=parent)
+                                                                             ("Todos", "*.*")], parent=parent,
+                                          initialdir=str(self.output_base) if self.output_base.exists() else None)
         if not path:
             return False
         try:
@@ -2193,6 +2342,12 @@ class SysReviewApp(ctk.CTk):
         self.last_steps = extra.get("last_steps") or {}
         self._last_cfg = extra.get("last_cfg")
         self._apply_preset(payload.get("review_name", "Revisión"), payload.get("config", {}), mark_dirty=False)
+        # Carpeta de resultados del proyecto: la misma donde está guardado el .prisma
+        p = Path(path)
+        self.output_base = p.parent.parent
+        self._out_name_custom = True
+        self.out_name_var.set(p.parent.name)
+        self._refresh_out_label()
         for s in list(self.sources):
             s["row"].destroy()
         self.sources.clear()
@@ -2248,43 +2403,18 @@ class SysReviewApp(ctk.CTk):
         PrismaReportDialog(self, pc.compute_counts(self.df), self.review_name.get(), self._export_cfg(),
                            self._provenance())
 
-    def _ask_save(self, ext, kind, prefix):
-        return filedialog.asksaveasfilename(defaultextension=ext, parent=self,
-                                            initialfile=f"{prefix}_{safe_name(self.review_name.get())}",
-                                            filetypes=[(kind, f"*{ext}")])
-
-    def _run_export(self, fn, path):
-        try:
-            fn()
-        except PermissionError:
-            messagebox.showerror("No se pudo guardar", f"El archivo está abierto en otro programa o no hay "
-                                 f"permisos:\n{path}", parent=self)
-            return
-        except Exception as e:
-            messagebox.showerror("Error al exportar", f"{e}", parent=self)
-            return
-        messagebox.showinfo("Exportado", f"Guardado en:\n{path}\n\n(Se guardó también la configuración y "
-                            "procedencia en un archivo _config.json junto al archivo cuando aplica.)", parent=self)
+    def _fname(self, prefix, ext):
+        return f"{prefix}_{safe_name(self.review_name.get())}{ext}"
 
     def _export_workbook(self):
-        path = self._ask_save(".xlsx", "Excel", "Cribado_PRISMA")
-        if path:
-            self._run_export(lambda: pc.export_workbook(path, self.df, pc.compute_counts(self.df), self._export_cfg(),
-                                                        self._provenance()), path)
+        self.save_output(self._fname("Cribado_PRISMA", ".xlsx"), lambda p: pc.export_workbook(
+            p, self.df, pc.compute_counts(self.df), self._export_cfg(), self._provenance()))
 
     def _export_flagged(self):
         if self.df is None:
             return
-        path = filedialog.asksaveasfilename(defaultextension=".xlsx", parent=self,
-                                            initialfile=f"Todos_con_banderas_{safe_name(self.review_name.get())}",
-                                            filetypes=[("Excel", "*.xlsx"), ("CSV", "*.csv")])
-        if not path:
-            return
-        if path.lower().endswith(".csv"):
-            self._run_export(lambda: pc.export_csv(path, self.df, self._export_cfg(), self._provenance()), path)
-        else:
-            self._run_export(lambda: pc.export_workbook(path, self.df, pc.compute_counts(self.df),
-                                                        self._export_cfg(), self._provenance()), path)
+        self.save_output(self._fname("Todos_con_banderas", ".xlsx"), lambda p: pc.export_workbook(
+            p, self.df, pc.compute_counts(self.df), self._export_cfg(), self._provenance()))
 
     def _included(self):
         d = self.df[self.df["Status"] == pc.STATUS_INCLUDED]
@@ -2295,30 +2425,22 @@ class SysReviewApp(ctk.CTk):
 
     def _export_csv_included(self):
         d = self._included()
-        if d is None:
-            return
-        path = self._ask_save(".csv", "CSV", "Articulos_Incluidos")
-        if path:
-            self._run_export(lambda: pc.export_csv(path, d, self._export_cfg(), self._provenance()), path)
+        if d is not None:
+            self.save_output(self._fname("Articulos_Incluidos", ".csv"),
+                             lambda p: pc.export_csv(p, d, self._export_cfg(), self._provenance()))
 
     def _export_ris_included(self):
         d = self._included()
-        if d is None:
-            return
-        path = self._ask_save(".ris", "RIS (Zotero, Mendeley, EndNote)", "Articulos_Incluidos")
-        if path:
-            self._run_export(lambda: pc.export_ris(path, d), path)
+        if d is not None:
+            self.save_output(self._fname("Articulos_Incluidos", ".ris"), lambda p: pc.export_ris(p, d))
 
     def _export_reviewer_sheet(self):
         sheet = pc.reviewer_sheet(self.df)
         if sheet.empty:
             messagebox.showinfo("Sin registros", "No hay registros que hayan llegado al cribado.", parent=self)
             return
-        path = self._ask_save(".xlsx", "Excel", "Hoja_revisor2")
-        if not path:
-            return
 
-        def write():
+        def write(path):
             instr = pd.DataFrame({"Instrucciones": [
                 "1. Lee título, keywords y abstract de cada registro (hoja 'Cribado').",
                 "2. Escribe en 'Decision_R2': Incluir, Excluir o Dudoso.",
@@ -2329,7 +2451,7 @@ class SysReviewApp(ctk.CTk):
             with pd.ExcelWriter(path, engine="openpyxl") as xw:
                 sheet.to_excel(xw, sheet_name="Cribado", index=False)
                 instr.to_excel(xw, sheet_name="Instrucciones", index=False)
-        self._run_export(write, path)
+        self.save_output(self._fname("Hoja_revisor2", ".xlsx"), write)
 
     def _import_reviewer_sheet(self):
         path = filedialog.askopenfilename(title="Importar hoja del 2º revisor", parent=self,
@@ -2353,7 +2475,17 @@ class SysReviewApp(ctk.CTk):
 
 
 def main():
-    app = SysReviewApp()
+    try:
+        app = SysReviewApp()
+    except Exception:
+        text = traceback.format_exc()
+        SysReviewApp._log_error(text)
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror("SysReview PRISMA no pudo iniciar",
+                             f"{text[-1500:]}\n\nEl detalle se guardó en:\n{ERROR_LOG}", parent=root)
+        root.destroy()
+        raise
     app.mainloop()
 
 
