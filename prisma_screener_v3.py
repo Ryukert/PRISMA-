@@ -1337,8 +1337,19 @@ class SysReviewApp(ctk.CTk):
         frame = ctk.CTkFrame(self._content, fg_color=BG, corner_radius=0)
         _screen_header(frame, "📁  Paso 1 — Cargar Archivos de Búsqueda",
                        "Agrega una o varias exportaciones. El nombre de la fuente se detecta automáticamente y puedes editarlo.")
-        body = ctk.CTkFrame(frame, fg_color=BG)
-        body.pack(fill="both", expand=True, padx=28, pady=10)
+        # Barra de acciones FIJA abajo: el botón Combinar nunca se pierde aunque haya muchos archivos
+        actions = ctk.CTkFrame(frame, fg_color=SURFACE, corner_radius=0)
+        actions.pack(side="bottom", fill="x")
+        self.btn_combine = ctk.CTkButton(actions, text="▶  Combinar y preparar datos", height=48,
+                                         font=("Arial Black", 14), fg_color=ACCENT, hover_color=ACCENT2,
+                                         text_color="white", corner_radius=12, command=self._run_combine)
+        self.btn_combine.pack(side="left", fill="x", expand=True, padx=(28, 8), pady=10)
+        self.btn_next_dedup = _ghost_button(actions, "➡  Ir al Paso 2", GREEN, lambda: self._show_tab(1),
+                                            height=48, width=170)
+        self.btn_next_dedup.pack(side="left", padx=(0, 28), pady=10)
+
+        body = ctk.CTkScrollableFrame(frame, fg_color=BG, corner_radius=0)
+        body.pack(fill="both", expand=True, padx=20, pady=6)
         help_frame = ctk.CTkFrame(body, fg_color="#eff6ff", corner_radius=8, border_color="#bfdbfe", border_width=1)
         help_frame.pack(fill="x", pady=(0, 10))
         ctk.CTkLabel(help_frame, text="💡  Formatos: CSV (coma o punto y coma) · Excel .xlsx/.xls · LibreOffice .ods · "
@@ -1358,7 +1369,24 @@ class SysReviewApp(ctk.CTk):
         self.sources_frame = ctk.CTkFrame(src_card, fg_color="transparent")
         self.sources_frame.pack(fill="x")
 
-        map_card = _card_frame(body, "MAPEO DE COLUMNAS  (opcional — solo si tus exportaciones usan nombres no estándar)")
+        self.load_stats_frame = ctk.CTkFrame(body, fg_color="transparent")
+        self.load_stats_frame.pack(fill="x", pady=(0, 10))
+
+        map_outer = ctk.CTkFrame(body, fg_color=SURFACE, corner_radius=12, border_color=BORDER, border_width=1)
+        map_outer.pack(fill="x", pady=(0, 10))
+        map_card = ctk.CTkFrame(map_outer, fg_color="transparent")
+
+        def toggle_map():
+            if map_card.winfo_ismapped():
+                map_card.pack_forget()
+                map_btn.configure(text="▸  Mapeo de columnas (opcional — solo si tus archivos usan nombres no estándar)")
+            else:
+                map_card.pack(fill="x", padx=14, pady=(0, 12))
+                map_btn.configure(text="▾  Mapeo de columnas (opcional — solo si tus archivos usan nombres no estándar)")
+        map_btn = ctk.CTkButton(map_outer, text="▸  Mapeo de columnas (opcional — solo si tus archivos usan nombres "
+                                               "no estándar)", anchor="w", fg_color="transparent", hover_color=SURFACE2,
+                                text_color=MUTED2, font=("Arial Bold", 10), height=34, command=toggle_map)
+        map_btn.pack(fill="x", padx=4, pady=4)
         self._col_map = {}
         pairs = [("title", "Title / Article Title"), ("year", "Year / Publication Year"), ("abstract", "Abstract"),
                  ("doi", "DOI"), ("doc_type", "Document Type"), ("authors", "Authors"),
@@ -1376,14 +1404,10 @@ class SysReviewApp(ctk.CTk):
                 e.pack(side="left", fill="x", expand=True)
                 self._col_map[k] = e
 
-        self.load_stats_frame = ctk.CTkFrame(body, fg_color="transparent")
-        self.load_stats_frame.pack(fill="x", pady=10)
-        self.btn_combine = ctk.CTkButton(body, text="▶  Combinar y preparar datos", height=50, font=("Arial Black", 14),
-                                         fg_color=ACCENT, hover_color=ACCENT2, text_color="white", corner_radius=12,
-                                         command=self._run_combine)
-        self.btn_combine.pack(fill="x", pady=(0, 10))
         _log_label(body, "LOG DE CARGA")
-        self.log_load = _log_area(body, height=8)
+        self.log_load = scrolledtext.ScrolledText(body, height=10, bg=SURFACE2, fg=TEXT, insertbackground=TEXT,
+                                                  font=("Consolas", 9), relief="flat", state="disabled", wrap="word")
+        self.log_load.pack(fill="x")
         return frame
 
     def _get_col_map(self):
@@ -2219,6 +2243,7 @@ class SysReviewApp(ctk.CTk):
         def st(ok):
             return "normal" if ok and not busy else "disabled"
         self.btn_combine.configure(state=st(bool(self.sources)))
+        self.btn_next_dedup.configure(state=st(has))
         self.btn_dedup.configure(state=st(has))
         self.btn_save_flagged.configure(state=st(has))
         self.btn_run.configure(state=st(has), text="⏳  Procesando…" if busy else "⚡  Ejecutar cribado automático")
