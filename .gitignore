@@ -11,6 +11,8 @@ __pycache__/
 *.bib
 *.nbib
 savedrecs*
+*.pdf
+PDFs/
 # Resultados generados (diagramas, informes)
 PRISMA_*.png
 PRISMA_*.svg
