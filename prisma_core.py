@@ -46,7 +46,9 @@ AUTO_COLS = ["Auto_Decision", "Auto_Stage", "Auto_Reason", "Matched_Required", "
 MANUAL_COLS = ["TA_Decision", "TA_Reason", "TA_Note", "FT_Decision", "FT_Reason",
                "TA_Decision_R2", "TA_Reason_R2"]
 STATUS_COLS = ["Status", "PRISMA_Stage"]
-ALL_FLAG_COLS = DEDUP_COLS + AUTO_COLS + MANUAL_COLS + STATUS_COLS
+OA_COLS = ["OA_Status", "OA_Type", "OA_PDF_URL", "OA_Alt_URLs", "OA_URL", "OA_Host", "OA_License", "OA_Via",
+           "OA_Checked", "OA_Found_DOI", "PDF_File", "PDF_Note"]
+ALL_FLAG_COLS = DEDUP_COLS + AUTO_COLS + MANUAL_COLS + STATUS_COLS + OA_COLS
 
 # Códigos de decisión (se guardan en inglés, compatibles con v2)
 INCLUDE, EXCLUDE, REVIEW, MAYBE, NOT_RETRIEVED = "Include", "Exclude", "Review", "Maybe", "Not retrieved"
@@ -1970,7 +1972,8 @@ EXPORT_COL_ORDER = ["record_id", "source", "Status", "PRISMA_Stage", "year", "ti
                     "doc_type", "doi", "keywords", "abstract", "Auto_Decision", "Auto_Stage", "Auto_Reason",
                     "Matched_Required", "Matched_Secondary", "Matched_Exclude", "Matched_Blocks",
                     "Missing_Blocks", "N_Blocks", "TA_Decision", "TA_Reason", "TA_Note", "FT_Decision",
-                    "FT_Reason", "TA_Decision_R2", "TA_Reason_R2", "Is_Duplicate", "Duplicate_Of",
+                    "FT_Reason", "TA_Decision_R2", "TA_Reason_R2", "OA_Status", "OA_Type", "OA_PDF_URL", "OA_URL",
+                    "OA_Host", "OA_License", "PDF_File", "PDF_Note", "Is_Duplicate", "Duplicate_Of",
                     "Duplicate_Reason"]
 
 

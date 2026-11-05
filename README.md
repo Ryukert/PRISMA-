@@ -40,6 +40,30 @@ python prisma_screener_v3.py
 4. **Revisión y resultados** — revisión manual con resaltado de términos, segundo revisor con κ de
    Cohen, diagrama PRISMA 2020 y exportaciones.
 
+5. **PDFs de acceso abierto** — encuentra qué artículos tienen una versión **legal y gratuita** y la
+   descarga a `…\<carpeta de resultados>\PDFs\` (ver abajo).
+
+## PDFs de acceso abierto (Paso 5)
+
+1. Elige el alcance (*Incluidos*, *Incluidos + pendientes* o *Todos los cribados*) y pulsa
+   **🔎 Buscar PDFs disponibles**. Se consulta [OpenAlex](https://openalex.org) con el DOI (gratis, sin
+   registro); los registros sin DOI se buscan por título y solo se aceptan si título y año coinciden.
+   Si escribes tu correo también se consulta [Unpaywall](https://unpaywall.org) (opcional).
+2. Cada artículo queda como:
+
+   | Estado | Significado |
+   |---|---|
+   | **PDF disponible** | Hay un PDF gratuito (revista abierta, repositorio, PubMed Central…) |
+   | **Solo página web** | Es gratuito, pero sin enlace directo al PDF: ábrelo en el navegador |
+   | **Cerrado** | Sin versión libre: biblioteca, préstamo interbibliotecario o pedirlo al autor |
+
+3. **⬇ Descargar todos los disponibles** (o solo los seleccionados). Si una copia falla, se prueban las
+   alternativas (p. ej. Europe PMC para artículos de MDPI/*Sensors*). Solo se guardan PDFs reales.
+   Puede tardar varios minutos; volver a pulsar reintenta solo los que faltan.
+4. Doble clic en una fila abre el PDF descargado o su enlace. En la ventana de revisión, el botón
+   **🌐 Abrir artículo / PDF** hace lo mismo (útil para la evaluación a texto completo).
+5. **💾 Exportar lista** guarda un Excel con el estado y los enlaces de cada artículo.
+
 ## Sintaxis de términos
 
 | Escribes | Coincide con | No coincide con |
@@ -123,6 +147,7 @@ Si ocurre un error, la app lo muestra y lo guarda en `~/.sysreview_errores.log`.
 |---|---|
 | `prisma_core.py` | Lógica sin interfaz: lectura, normalización, deduplicación, cribado, conteos PRISMA, κ, parser de cadenas, exportaciones, sesiones |
 | `prisma_presets.py` | Presets de ejemplo, validación y guardado (con respaldo si el archivo se daña) |
+| `prisma_oa.py` | Consulta de acceso abierto (OpenAlex, Unpaywall) y descarga de PDFs |
 | `prisma_screener_v3.py` | Interfaz gráfica (CustomTkinter) |
 | `tests/test_core.py` | Pruebas del núcleo |
 

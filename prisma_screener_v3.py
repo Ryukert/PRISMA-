@@ -27,6 +27,7 @@ import customtkinter as ctk
 import pandas as pd
 
 import prisma_core as pc
+import prisma_oa as pa
 from prisma_presets import (BLANK_CONFIG, DEFAULT_PRESETS, PRESET_TEMPLATE, load_user_presets,
                             save_user_presets, validate_preset_cfg)
 
@@ -114,6 +115,29 @@ def save_settings(data: dict) -> None:
 def default_output_base() -> Path:
     docs = Path.home() / "Documents"
     return (docs if docs.exists() else Path.home()) / "SysReview PRISMA"
+
+
+def open_record_link(row) -> None:
+    """Abre el PDF descargado; si no hay, el PDF de acceso abierto, la página OA, el DOI o una búsqueda."""
+    import os
+    import urllib.parse
+    import webbrowser
+    pdf = str(row.get("PDF_File", "") or "")
+    if pdf and Path(pdf).exists():
+        try:
+            os.startfile(pdf)  # noqa: S606
+            return
+        except (OSError, AttributeError):
+            pass
+    for key in ("OA_PDF_URL", "OA_URL"):
+        if row.get(key):
+            webbrowser.open(str(row[key]))
+            return
+    doi = pc.normalize_doi(row.get("doi", "")) or pc.normalize_doi(row.get("OA_Found_DOI", ""))
+    if doi:
+        webbrowser.open(f"https://doi.org/{doi}")
+    elif row.get("title"):
+        webbrowser.open("https://scholar.google.com/scholar?q=" + urllib.parse.quote(str(row["title"])))
 
 
 def find_app(widget):
@@ -797,6 +821,9 @@ class ReviewDialog(ctk.CTkToplevel):
                       text_color=TEXT, command=lambda: self._move(-1)).pack(side="left")
         ctk.CTkButton(nav, text="Siguiente ▶", width=110, height=36, fg_color=SURFACE2, hover_color=SURFACE3,
                       text_color=TEXT, command=lambda: self._move(1)).pack(side="left", padx=6)
+        b_open = _ghost_button(nav, "🌐 Abrir artículo / PDF", CYAN, lambda: open_record_link(self._row()), height=36)
+        b_open.pack(side="left", padx=6)
+        Tooltip(b_open, "Abre el PDF descargado (Paso 5); si no hay, el enlace de acceso abierto o la página del DOI.")
         ctk.CTkButton(nav, text="Cerrar", width=90, height=36, fg_color="transparent", hover_color=SURFACE2,
                       text_color=MUTED2, command=self.destroy).pack(side="right")
         ctk.CTkButton(nav, text="💾 Guardar y siguiente ▶", width=200, height=36, fg_color=ACCENT,
@@ -1263,6 +1290,7 @@ class SysReviewApp(ctk.CTk):
             ("2", "Deduplicar", "🔗", "DOI, título normalizado y títulos similares"),
             ("3", "Cribado automático", "🔬", "Años, tipos, keywords y bloques de la cadena"),
             ("4", "Revisión y resultados", "📊", "Revisión manual, segundo revisor y exportación"),
+            ("5", "PDFs de acceso abierto", "📥", "Encuentra y descarga versiones legales gratuitas de los artículos"),
         ]:
             btn = ctk.CTkButton(sidebar, text=f"  {icon}  Paso {num} — {label}", anchor="w", height=40,
                                 fg_color="transparent", hover_color=SURFACE2, font=("Arial", 12), text_color=MUTED,
@@ -1317,7 +1345,7 @@ class SysReviewApp(ctk.CTk):
         self._content = ctk.CTkFrame(main_row, fg_color=BG, corner_radius=0)
         self._content.pack(side="left", fill="both", expand=True)
         self._screens = [self._build_screen_load(), self._build_screen_dedup(),
-                         self._build_screen_cribar(), self._build_screen_results()]
+                         self._build_screen_cribar(), self._build_screen_results(), self._build_screen_pdfs()]
         self._show_tab(0)
 
     def _show_tab(self, idx):
@@ -2069,6 +2097,256 @@ class SysReviewApp(ctk.CTk):
         return frame
 
     # ── tabla ─────────────────────────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════════
+    # PANTALLA 5 — PDFs DE ACCESO ABIERTO
+    # ══════════════════════════════════════════════════════════════════════════
+    def _build_screen_pdfs(self):
+        frame = ctk.CTkFrame(self._content, fg_color=BG, corner_radius=0)
+        _screen_header(frame, "📥  Paso 5 — PDFs de acceso abierto",
+                       "Encuentra qué artículos tienen una versión LEGAL y gratuita (de la editorial o de un "
+                       "repositorio) y descárgala a la carpeta de resultados.")
+        actions = ctk.CTkFrame(frame, fg_color=SURFACE, corner_radius=0)
+        actions.pack(side="bottom", fill="x")
+        self.btn_oa_search = ctk.CTkButton(actions, text="🔎  Buscar PDFs disponibles", height=44,
+                                           font=("Arial Black", 13), fg_color=ACCENT, hover_color=ACCENT2,
+                                           text_color="white", corner_radius=10, command=self._oa_search)
+        self.btn_oa_search.pack(side="left", padx=(24, 6), pady=10)
+        self.btn_oa_dl_all = ctk.CTkButton(actions, text="⬇  Descargar todos los disponibles", height=44,
+                                           font=("Arial Bold", 12), fg_color=GREEN, hover_color="#15803d",
+                                           text_color="white", corner_radius=10, command=lambda: self._oa_download(False))
+        self.btn_oa_dl_all.pack(side="left", padx=6)
+        self.oa_buttons = [self.btn_oa_search, self.btn_oa_dl_all]
+        for text, color, cmd in [("⬇ Descargar seleccionados", GREEN, lambda: self._oa_download(True)),
+                                 ("🌐 Abrir enlace / PDF", ACCENT2, self._oa_open_selected),
+                                 ("📂 Carpeta de PDFs", MUTED2, lambda: open_folder(self._pdf_folder())),
+                                 ("💾 Exportar lista", TEAL, self._oa_export)]:
+            b = _ghost_button(actions, text, color, cmd, height=44)
+            b.pack(side="left", padx=4)
+            self.oa_buttons.append(b)
+
+        body = ctk.CTkFrame(frame, fg_color=BG)
+        body.pack(fill="both", expand=True, padx=24, pady=8)
+        help_f = ctk.CTkFrame(body, fg_color="#eff6ff", corner_radius=8, border_color="#bfdbfe", border_width=1)
+        help_f.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(help_f, text="💡  Se consulta OpenAlex (gratis, sin registro) con el DOI de cada artículo. Si escribes "
+                                  "tu correo también se consulta Unpaywall, que encuentra más versiones en repositorios. "
+                                  "«Solo página web» = el artículo es gratuito pero la editorial no da enlace directo al "
+                                  "PDF: ábrelo en el navegador. «Cerrado» = consíguelo por tu biblioteca o pidiéndolo "
+                                  "al autor. Requiere conexión a internet.",
+                     font=("Arial", 10), text_color="#1d4ed8", wraplength=1050, justify="left").pack(anchor="w", padx=12, pady=6)
+        opt = ctk.CTkFrame(body, fg_color="transparent")
+        opt.pack(fill="x", pady=(0, 6))
+        ctk.CTkLabel(opt, text="Buscar en:", font=("Courier", 10), text_color=MUTED2).pack(side="left")
+        self.oa_scope_var = tk.StringVar(value="Incluidos")
+        ctk.CTkSegmentedButton(opt, values=["Incluidos", "Incluidos + pendientes", "Todos los cribados"],
+                               variable=self.oa_scope_var, font=("Arial", 11), **SEG_STYLE).pack(side="left", padx=(6, 20))
+        ctk.CTkLabel(opt, text="Correo para Unpaywall (opcional):", font=("Courier", 10), text_color=MUTED2).pack(side="left")
+        self.oa_email_var = tk.StringVar(value=self._settings.get("unpaywall_email", ""))
+        em = ctk.CTkEntry(opt, textvariable=self.oa_email_var, width=230, height=30, font=("Arial", 11),
+                          fg_color=SURFACE2, border_color=BORDER, text_color=TEXT, placeholder_text="tu@correo.com")
+        em.pack(side="left", padx=6)
+        Tooltip(em, "Unpaywall pide un correo para identificar quién consulta (no envía nada más). Se guarda solo en "
+                    "este equipo. Déjalo vacío para usar solo OpenAlex.")
+
+        stats = ctk.CTkFrame(body, fg_color="transparent")
+        stats.pack(fill="x", pady=(0, 6))
+        self.oa_cards = {
+            "checked": _stat_card(stats, "Consultados", "—", MUTED2),
+            "pdf": _stat_card(stats, "PDF disponible", "—", GREEN),
+            "web": _stat_card(stats, "Solo página web", "—", CYAN),
+            "closed": _stat_card(stats, "Cerrados / no encontrados", "—", RED),
+            "nodoi": _stat_card(stats, "Sin DOI", "—", YELLOW),
+            "downloaded": _stat_card(stats, "Descargados", "—", ACCENT2),
+        }
+        prow = ctk.CTkFrame(body, fg_color="transparent")
+        prow.pack(fill="x", pady=(0, 4))
+        self.oa_progress = ctk.CTkProgressBar(prow, height=8, fg_color=SURFACE2, progress_color=ACCENT)
+        self.oa_progress.pack(side="left", fill="x", expand=True)
+        self.oa_progress.set(0)
+        self.lbl_oa_progress = ctk.CTkLabel(prow, text="", font=("Courier", 10), text_color=MUTED2, width=260, anchor="e")
+        self.lbl_oa_progress.pack(side="left", padx=(10, 0))
+
+        bar = ctk.CTkFrame(body, fg_color=SURFACE2, corner_radius=10)
+        bar.pack(fill="x", pady=(0, 6))
+        ctk.CTkLabel(bar, text="Mostrar:", font=("Courier", 10), text_color=MUTED2).pack(side="left", padx=(12, 4), pady=6)
+        self.oa_view_var = tk.StringVar(value="Todos")
+        ctk.CTkSegmentedButton(bar, values=["Con PDF", "Solo página web", "Cerrados", "Descargados", "Todos"],
+                               variable=self.oa_view_var, font=("Arial", 11), **SEG_STYLE,
+                               command=lambda _v: self._oa_refresh_table()).pack(side="left", padx=4, pady=6)
+        self.lbl_oa_count = ctk.CTkLabel(bar, text="", font=("Courier", 10), text_color=MUTED2)
+        self.lbl_oa_count.pack(side="right", padx=12)
+
+        tf = tk.Frame(body, bg=BG)
+        tf.pack(fill="both", expand=True)
+        cols = [("ID", 70), ("Año", 50), ("Título", 420), ("DOI", 190), ("Acceso", 120), ("Tipo / dónde", 230),
+                ("Archivo", 140)]
+        self.oa_tree = ttk.Treeview(tf, columns=[c for c, _ in cols], show="headings", style="SR.Treeview",
+                                    selectmode="extended")
+        for c, w in cols:
+            self.oa_tree.heading(c, text=c)
+            self.oa_tree.column(c, width=w, minwidth=40, stretch=(c == "Título"))
+        vsb = ttk.Scrollbar(tf, orient="vertical", command=self.oa_tree.yview)
+        self.oa_tree.configure(yscrollcommand=vsb.set)
+        self.oa_tree.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="left", fill="y")
+        for tag, (bg, fg) in {pa.OA_PDF: ("#f0fdf4", "#166534"), pa.OA_WEB: ("#ecfeff", "#155e75"),
+                              pa.OA_CLOSED: ("#fef2f2", "#991b1b"), pa.OA_NOT_FOUND: ("#fef2f2", "#991b1b"),
+                              pa.OA_NO_DOI: ("#fefce8", "#854d0e"), "descargado": ("#eef2ff", "#3730a3")}.items():
+            self.oa_tree.tag_configure(tag, background=bg, foreground=fg)
+        self.oa_tree.bind("<Double-1>", lambda _e: self._oa_open_selected())
+        self.oa_tree.bind("<Return>", lambda _e: self._oa_open_selected())
+        return frame
+
+    def _pdf_folder(self) -> Path:
+        p = self.output_folder() / "PDFs"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def _oa_scope_rids(self):
+        statuses = {"Incluidos": [pc.STATUS_INCLUDED],
+                    "Incluidos + pendientes": [pc.STATUS_INCLUDED, pc.STATUS_PENDING],
+                    "Todos los cribados": pc.SCREENED_STATUSES}[self.oa_scope_var.get()]
+        return self.df.index[self.df["Status"].isin(statuses)].tolist()
+
+    def _oa_progress_cb(self, done, total, label="OpenAlex"):
+        self._post(self._oa_set_progress, done, total, label)
+
+    def _oa_set_progress(self, done, total, label):
+        self.oa_progress.set(done / total if total else 0)
+        self.lbl_oa_progress.configure(text=f"{label}: {done}/{total}")
+
+    def _oa_search(self):
+        if self.df is None:
+            return
+        rids = self._oa_scope_rids()
+        if not rids:
+            messagebox.showinfo("Sin artículos", f"No hay artículos en «{self.oa_scope_var.get()}». "
+                                "Ejecuta el cribado (Paso 3) primero.", parent=self)
+            return
+        email = self.oa_email_var.get().strip()
+        if email and not re.match(r"[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+            messagebox.showerror("Correo inválido", "Escribe un correo válido o deja el campo vacío.", parent=self)
+            return
+        self._settings["unpaywall_email"] = email
+        save_settings(self._settings)
+        df = self.df[["doi", "title", "year"]].copy()
+        self.oa_progress.set(0)
+
+        def work():
+            return pa.check_records(df, rids, email or None, self._oa_progress_cb)
+
+        def ok(updates):
+            for rid, info in updates.items():
+                for k, v in info.items():
+                    self.df.loc[rid, k] = v
+            self.df = pc.compute_status(self.df)
+            n_pdf = sum(1 for i in updates.values() if i["OA_Status"] == pa.OA_PDF)
+            self.lbl_oa_progress.configure(text=f"✓ {len(updates)} consultados · {n_pdf} con PDF")
+            self._mark_dirty()
+            self.oa_view_var.set("Todos")
+            self._oa_refresh_table()
+
+        def err(e, _tb):
+            self.lbl_oa_progress.configure(text="✗ Error")
+            messagebox.showerror("Sin conexión", f"No se pudo consultar OpenAlex.\n\n{e}\n\n"
+                                 "Revisa tu conexión a internet e inténtalo de nuevo.", parent=self)
+
+        self.lbl_oa_progress.configure(text="Consultando…")
+        self._bg(work, ok, err)
+
+    def _oa_download(self, selected_only):
+        if self.df is None:
+            return
+        d = self.df
+        if selected_only:
+            rids = list(self.oa_tree.selection())
+            if not rids:
+                messagebox.showinfo("Sin selección", "Selecciona filas en la tabla (Ctrl o Shift para varias).",
+                                    parent=self)
+                return
+        else:
+            rids = d.index[d["OA_Status"].eq(pa.OA_PDF)].tolist()
+        jobs = [(rid, pa.candidate_urls(d.loc[rid]), pa.pdf_file_name(d.loc[rid])) for rid in rids]
+        jobs = [j for j in jobs if j[1]]
+        if not jobs:
+            messagebox.showinfo("Nada que descargar", "No hay artículos con PDF disponible en la selección. "
+                                "Primero usa «Buscar PDFs disponibles».", parent=self)
+            return
+        folder = self._pdf_folder()
+        self.oa_progress.set(0)
+
+        def work():
+            return pa.download_records(jobs, folder, lambda k, n: self._post(self._oa_set_progress, k, n, "Descargando"))
+
+        def ok(results):
+            okn = 0
+            for rid, (path, note) in results.items():
+                self.df.loc[rid, "PDF_File"] = path
+                self.df.loc[rid, "PDF_Note"] = note
+                okn += bool(path)
+            self._mark_dirty()
+            self._oa_refresh_table()
+            fail = len(results) - okn
+            msg = f"Se descargaron {okn} de {len(results)} PDF en:\n{folder}"
+            if fail:
+                msg += (f"\n\n{fail} no se pudieron descargar automáticamente (la editorial lo bloquea o el enlace "
+                        "abre una página). Aparecen en la tabla con la nota; ábrelos con doble clic en el navegador.")
+            if messagebox.askyesno("Descarga terminada", msg + "\n\n¿Abrir la carpeta de PDFs?", parent=self):
+                open_folder(folder)
+
+        def err(e, _tb):
+            messagebox.showerror("Error en la descarga", str(e), parent=self)
+
+        self._bg(work, ok, err)
+
+    def _oa_refresh_table(self):
+        if not hasattr(self, "oa_tree"):
+            return
+        self.oa_tree.delete(*self.oa_tree.get_children())
+        if self.df is None:
+            return
+        d = self.df[self.df["OA_Status"].ne("")]
+        view = self.oa_view_var.get()
+        if view == "Con PDF":
+            d = d[d["OA_Status"].eq(pa.OA_PDF)]
+        elif view == "Solo página web":
+            d = d[d["OA_Status"].eq(pa.OA_WEB)]
+        elif view == "Cerrados":
+            d = d[d["OA_Status"].isin([pa.OA_CLOSED, pa.OA_NOT_FOUND, pa.OA_NO_DOI])]
+        elif view == "Descargados":
+            d = d[d["PDF_File"].ne("")]
+        for rid, r in d.iterrows():
+            where = " · ".join(x for x in (r["OA_Type"], r["OA_Host"]) if x)
+            file_txt = "✓ " + Path(r["PDF_File"]).name if r["PDF_File"] else (r["PDF_Note"][:40] if r["PDF_Note"] else "")
+            tag = "descargado" if r["PDF_File"] else r["OA_Status"]
+            doi_txt = r["doi"] or (f"{r['OA_Found_DOI']} (por título)" if r["OA_Found_DOI"] else "—")
+            self.oa_tree.insert("", "end", iid=rid, tags=(tag,), values=(
+                rid, fmt_year(r["year"]), str(r["title"])[:140], doi_txt, r["OA_Status"], where, file_txt))
+        all_checked = self.df[self.df["OA_Status"].ne("")]
+        st = all_checked["OA_Status"]
+        vals = {"checked": len(all_checked), "pdf": int(st.eq(pa.OA_PDF).sum()), "web": int(st.eq(pa.OA_WEB).sum()),
+                "closed": int(st.isin([pa.OA_CLOSED, pa.OA_NOT_FOUND]).sum()), "nodoi": int(st.eq(pa.OA_NO_DOI).sum()),
+                "downloaded": int(all_checked["PDF_File"].ne("").sum())}
+        for k, lbl in self.oa_cards.items():
+            lbl.configure(text=str(vals[k]) if len(all_checked) else "—")
+        self.lbl_oa_count.configure(text=f"{len(d)} de {len(all_checked)} consultados")
+
+    def _oa_open_selected(self):
+        sel = self.oa_tree.selection()
+        if not sel or self.df is None:
+            return
+        open_record_link(self.df.loc[sel[0]])
+
+    def _oa_export(self):
+        if self.df is None or not self.df["OA_Status"].ne("").any():
+            messagebox.showinfo("Sin datos", "Primero usa «Buscar PDFs disponibles».", parent=self)
+            return
+        cols = ["record_id", "year", "title", "authors", "journal", "doi", "OA_Found_DOI", "Status", "OA_Status",
+                "OA_Type", "OA_Host", "OA_License", "OA_PDF_URL", "OA_Alt_URLs", "OA_URL", "PDF_File", "PDF_Note",
+                "OA_Via", "OA_Checked"]
+        d = pc.export_frame(self.df[self.df["OA_Status"].ne("")][cols])
+        self.save_output(self._fname("PDFs_acceso_abierto", ".xlsx"), lambda p: d.to_excel(p, index=False))
+
     def _schedule_search(self):
         if self._search_job:
             self.after_cancel(self._search_job)
@@ -2202,6 +2480,7 @@ class SysReviewApp(ctk.CTk):
             self.source_var.set("Todas")
         self._refresh_counts()
         self._refresh_table()
+        self._oa_refresh_table()
         self._update_state()
 
     def _refresh_counts(self):
@@ -2250,6 +2529,9 @@ class SysReviewApp(ctk.CTk):
         self.btn_go_review.configure(state=st(screened))
         for b in self.result_buttons:
             b.configure(state=st(screened))
+        for b in self.oa_buttons:
+            b.configure(state=st(screened))
+        self.btn_oa_search.configure(text="⏳  Procesando…" if busy else "🔎  Buscar PDFs disponibles")
         self.lbl_sources_hint.configure(text=f"{len(self.sources)} archivo(s)" if self.sources else "Sin archivos")
 
     def _mark_dirty(self, value=True):

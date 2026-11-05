@@ -424,6 +424,97 @@ class TestReadersAndExports(unittest.TestCase):
         self.assertEqual(len(imp), len(sheet))
 
 
+class TestOpenAccess(unittest.TestCase):
+    """Sin red: se simulan las respuestas de OpenAlex y las descargas usan file://."""
+
+    def setUp(self):
+        import prisma_oa as pa
+        self.pa = pa
+        self.tmp = tempfile.mkdtemp()
+        self._orig = pa._get_json
+
+    def tearDown(self):
+        self.pa._get_json = self._orig
+
+    def test_parse_and_check(self):
+        pa = self.pa
+        fake = {"results": [
+            {"doi": "https://doi.org/10.1000/OPEN", "open_access": {"is_oa": True, "oa_status": "gold",
+             "oa_url": "https://x/a.pdf"}, "best_oa_location": {"pdf_url": "https://x/a.pdf",
+             "source": {"display_name": "Sensors"}, "license": "cc-by"}},
+            {"doi": "https://doi.org/10.1000/web", "open_access": {"is_oa": True, "oa_status": "bronze",
+             "oa_url": "https://x/landing"}, "best_oa_location": {"landing_page_url": "https://x/landing"}},
+            {"doi": "https://doi.org/10.1000/closed", "open_access": {"is_oa": False, "oa_status": "closed"}},
+            {"doi": "https://doi.org/10.1000/green", "open_access": {"is_oa": True, "oa_status": "green"},
+             "best_oa_location": {}, "locations": [{"is_oa": True, "pdf_url": "https://arxiv.org/pdf/1",
+                                                    "source": {"display_name": "arXiv"}}]},
+        ]}
+        calls = []
+        pa._get_json = lambda url, **k: (calls.append(url), fake)[1]
+        df = make_df({"S": [{"title": "a", "doi": "10.1000/open"}, {"title": "b", "doi": "doi:10.1000/web"},
+                            {"title": "c", "doi": "10.1000/closed"}, {"title": "d", "doi": "10.1000/green"},
+                            {"title": "e", "doi": "10.1000/missing"}, {"title": "f", "doi": ""}]})
+        up = pa.check_records(df, df.index.tolist())
+        st = [up[r]["OA_Status"] for r in df.index]
+        self.assertEqual(st, [pa.OA_PDF, pa.OA_WEB, pa.OA_CLOSED, pa.OA_PDF, pa.OA_NOT_FOUND, pa.OA_NO_DOI])
+        self.assertEqual(up["R00004"]["OA_Host"], "arXiv")
+        w = {"doi": "https://doi.org/10.3390/s1", "ids": {"pmcid": "https://www.ncbi.nlm.nih.gov/pmc/articles/123"},
+             "open_access": {"is_oa": True, "oa_status": "gold"},
+             "best_oa_location": {"pdf_url": "https://www.mdpi.com/x/pdf"},
+             "locations": [{"is_oa": True, "pdf_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC123/pdf/"}]}
+        info = pa._parse_openalex(w)
+        self.assertEqual(pa.candidate_urls(info), ["https://www.mdpi.com/x/pdf",
+                                                   "https://europepmc.org/articles/PMC123?pdf=render",
+                                                   "https://pmc.ncbi.nlm.nih.gov/articles/PMC123/pdf/"])
+        self.assertEqual(len(calls), 1)                      # un solo lote para 5 DOI
+        self.assertIn("doi%3A10.1000%2Fopen" if "%3A" in calls[0] else "doi:10.1000/open", calls[0])
+
+    def test_download_validates_pdf(self):
+        pa = self.pa
+        good = os.path.join(self.tmp, "good.pdf")
+        Path(good).write_bytes(b"%PDF-1.7\n" + b"x" * 2000)
+        html = os.path.join(self.tmp, "page.pdf")
+        Path(html).write_text("<html>login</html>", encoding="utf-8")
+        out = os.path.join(self.tmp, "out")
+        res = pa.download_records([("R1", Path(good).as_uri(), "a.pdf"), ("R2", Path(html).as_uri(), "b.pdf")],
+                                  Path(out), pause=0)
+        self.assertTrue(res["R1"][0].endswith("a.pdf") and os.path.getsize(res["R1"][0]) > 2000)
+        self.assertEqual(res["R2"][0], "")
+        self.assertIn("página web", res["R2"][1])
+        self.assertFalse(os.path.exists(os.path.join(out, "b.pdf")))
+        again = pa.download_records([("R1", Path(good).as_uri(), "a.pdf")], Path(out), pause=0)
+        self.assertEqual(again["R1"][1], "Ya estaba descargado")
+        # Si la primera copia no es PDF, prueba la alternativa
+        alt = pa.download_records([("R3", [Path(html).as_uri(), Path(good).as_uri()], "c.pdf")], Path(out), pause=0)
+        self.assertTrue(alt["R3"][0].endswith("c.pdf"))
+        self.assertIn("copia alternativa 2", alt["R3"][1])
+        row = {"OA_PDF_URL": "https://a/x.pdf", "OA_Alt_URLs": "https://pmc/y.pdf | https://a/x.pdf"}
+        self.assertEqual(pa.candidate_urls(row), ["https://a/x.pdf", "https://pmc/y.pdf"])
+
+    def test_title_lookup_requires_match(self):
+        pa = self.pa
+        res = {"results": [{"doi": "https://doi.org/10.1000/t1", "title": "Low noise MEMS accelerometer for bridges",
+                            "publication_year": 2020, "open_access": {"is_oa": True, "oa_status": "gold"},
+                            "best_oa_location": {"pdf_url": "https://x/t.pdf"}}]}
+        pa._get_json = lambda url, **k: res
+        hit = pa.lookup_openalex_title("Low-noise MEMS accelerometer for bridges", 2020)
+        self.assertEqual((hit["OA_Status"], hit["OA_Found_DOI"]), (pa.OA_PDF, "10.1000/t1"))
+        self.assertIsNone(pa.lookup_openalex_title("Low-noise MEMS accelerometer for bridges", 2012))   # año ≠
+        self.assertIsNone(pa.lookup_openalex_title("A completely different study about tunnels", 2020))
+
+    def test_pdf_file_name(self):
+        row = {"record_id": "R00012", "authors": "Pérez J.; Doe A.", "year": 2021,
+               "title": "Low-noise MEMS accelerometers: a field study / bridges"}
+        self.assertEqual(self.pa.pdf_file_name(row), "R00012_Perez_2021_low_noise_mems_accelerometers_a_field_study.pdf")
+
+    def test_oa_columns_persist_in_session(self):
+        d, cfg = screening_fixture()
+        d.loc[d.index[0], "OA_Status"] = self.pa.OA_PDF
+        p = os.path.join(self.tmp, "s.prisma")
+        pc.save_session(p, d, cfg, "x", [])
+        self.assertEqual(pc.load_session(p)["df"]["OA_Status"].iloc[0], self.pa.OA_PDF)
+
+
 class TestPresets(unittest.TestCase):
     def test_defaults_valid(self):
         for cfg in pp.DEFAULT_PRESETS.values():
