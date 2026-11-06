@@ -35,7 +35,9 @@ python prisma_screener_v3.py
    (sin acentos ni puntuación) y, opcionalmente, títulos similares. Nunca fusiona por título
    registros con DOI distintos, ni títulos similares con números distintos (*Part I* ≠ *Part II*)
    o años separados por más de 1. De cada grupo conserva el registro más completo.
-3. **Cribado automático** — año, tipo de documento (coincidencia exacta por tipo), bloque
+3. **Cribado automático** — primero pide la **pregunta de investigación** (obligatoria; componentes
+   PICO opcionales). Se muestra en la ventana de revisión y se incluye en el informe PRISMA, el Excel
+   y el proyecto. Después aplica año, tipo de documento (coincidencia exacta por tipo), bloque
    obligatorio, bloque secundario, términos de exclusión y bloques de la cadena de búsqueda.
 4. **Revisión y resultados** — revisión manual con resaltado de términos, segundo revisor con κ de
    Cohen, diagrama PRISMA 2020 y exportaciones.

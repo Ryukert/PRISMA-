@@ -151,6 +151,8 @@ DEFAULT_PRESETS = {
 
 BLANK_CONFIG = {
     "description": "",
+    "research_question": "",
+    "rq_population": "", "rq_intervention": "", "rq_comparison": "", "rq_outcome": "",
     "year_from": "", "year_to": "",
     "kw_required": "", "kw_secondary": "", "kw_exclude": "", "doc_exclude": "",
     "doc_include": "", "languages": "",
@@ -165,6 +167,11 @@ PRESET_TEMPLATE = {
         "descripcion_general": "Este archivo configura una revisión sistemática PRISMA. Edita los valores según tu tema.",
         "name": "STRING — Nombre de tu revisión.",
         "description": "STRING — Descripción breve del tema.",
+        "research_question": "STRING — Pregunta de investigación (obligatoria para ejecutar el cribado).",
+        "rq_population": "STRING — Opcional (PICO). Población / objeto de estudio.",
+        "rq_intervention": "STRING — Opcional (PICO). Intervención / tecnología.",
+        "rq_comparison": "STRING — Opcional (PICO). Comparación.",
+        "rq_outcome": "STRING — Opcional (PICO). Resultado / medida.",
         "year_from": "INTEGER — Año mínimo. Ej: 2015",
         "year_to": "INTEGER — Año máximo. Ej: 2026",
         "kw_required": "STRING — Términos OBLIGATORIOS separados por coma. Admite comodines: monitor*",
@@ -206,7 +213,8 @@ PRESET_TEMPLATE = {
 }
 
 _STRING_FIELDS = ["name", "description", "kw_required", "kw_secondary", "kw_exclude", "doc_exclude",
-                  "doc_include", "languages"]
+                  "doc_include", "languages", "research_question", "rq_population", "rq_intervention",
+                  "rq_comparison", "rq_outcome"]
 
 
 def validate_preset_cfg(cfg) -> None:

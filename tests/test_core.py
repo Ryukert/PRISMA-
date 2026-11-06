@@ -530,6 +530,17 @@ class TestPresets(unittest.TestCase):
         self.assertEqual((r["year_from"], r["doc_include"], r["languages"], r["min_blocks"]),
                          (p["year_from"], p["doc_include"], p["languages"], p["min_blocks"]))
 
+    def test_research_question_in_report(self):
+        d, cfg = screening_fixture()
+        cfg.update({"research_question": "¿Qué sensores MEMS de bajo ruido se usan en SHM?",
+                    "rq_population": "puentes", "rq_outcome": "identificación modal"})
+        pp.validate_preset_cfg({"research_question": cfg["research_question"], "rq_population": "puentes"})
+        out, _ = pc.run_screening(d, cfg)
+        txt = pc.build_text_report(pc.compute_counts(out), "x", cfg)
+        self.assertLess(txt.index("PREGUNTA DE INVESTIGACIÓN"), txt.index("IDENTIFICACIÓN"))
+        self.assertIn("Población / objeto de estudio: puentes", txt)
+        self.assertNotIn("Comparación:", txt)          # componentes vacíos no se muestran
+
     def test_invalid(self):
         with self.assertRaises(ValueError):
             pp.validate_preset_cfg({"year_from": "2015", "exclude_mode": "x", "min_blocks": 9,

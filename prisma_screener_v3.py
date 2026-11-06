@@ -231,13 +231,24 @@ def make_modal(win, parent):
     win.transient(parent)
 
     def grab():
+        # Con Tk 9, tocar una ventana ya cerrada puede tumbar el programa (no solo dar TclError):
+        # verificar primero que siga existiendo.
         try:
+            if not win.winfo_exists():
+                return
             win.lift()
             win.grab_set()
             win.focus_force()
         except tk.TclError:
             pass
-    win.after(150, grab)
+    job = win.after(150, grab)
+
+    def cancel(_e=None):
+        try:
+            win.after_cancel(job)
+        except (tk.TclError, ValueError):
+            pass
+    win.bind("<Destroy>", lambda e: cancel() if e.widget is win else None, add="+")
 
 
 def _screen_header(parent, title, subtitle=""):
@@ -451,6 +462,93 @@ class BlocksEditorDialog(ctk.CTkToplevel):
             return
         self.on_save(self._collect())
         self.destroy()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DIÁLOGO — Pregunta de investigación
+# ══════════════════════════════════════════════════════════════════════════════
+RQ_MIN_LEN = 15
+
+
+class ResearchQuestionDialog(ctk.CTkToplevel):
+    """Pide la pregunta de investigación (obligatoria) y, opcionalmente, sus componentes PICO."""
+
+    def __init__(self, parent, current: dict, on_save, required_to_continue=False):
+        super().__init__(parent)
+        self.title("Pregunta de investigación")
+        self.geometry("780x640")
+        self.configure(fg_color=BG)
+        self.on_save = on_save
+        _screen_header(self, "❓  Pregunta de investigación",
+                       "Es obligatoria para ejecutar el cribado: guía las decisiones y se incluye en el informe PRISMA.")
+        body = ctk.CTkFrame(self, fg_color=BG)
+        body.pack(fill="both", expand=True, padx=22, pady=10)
+        if required_to_continue:
+            warn = ctk.CTkFrame(body, fg_color="#fef9c3", corner_radius=8, border_color="#fde047", border_width=1)
+            warn.pack(fill="x", pady=(0, 10))
+            ctk.CTkLabel(warn, text="⚠  Antes de cribar, escribe tu pregunta de investigación. El cribado se ejecutará "
+                                    "en cuanto la guardes.", font=("Arial Bold", 11), text_color="#854d0e",
+                         wraplength=700, justify="left").pack(anchor="w", padx=12, pady=8)
+        ctk.CTkLabel(body, text="Pregunta de investigación *", font=("Arial Bold", 12), text_color=TEXT).pack(anchor="w")
+        ctk.CTkLabel(body, text="Ej.: ¿Qué acelerómetros MEMS de bajo ruido se han usado para el monitoreo de la salud "
+                                "estructural de edificios y puentes, y qué desempeño reportan frente a sensores "
+                                "convencionales?", font=("Arial", 10), text_color=MUTED2, wraplength=720,
+                     justify="left").pack(anchor="w", pady=(0, 4))
+        self.q = ctk.CTkTextbox(body, height=90, font=("Arial", 12), fg_color=SURFACE, border_color=BORDER,
+                                border_width=1, text_color=TEXT, wrap="word")
+        self.q.pack(fill="x")
+        self.q.insert("1.0", current.get("research_question", ""))
+        self.lbl_len = ctk.CTkLabel(body, text="", font=("Arial", 9), text_color=MUTED)
+        self.lbl_len.pack(anchor="e")
+        self.q.bind("<KeyRelease>", lambda _e: self._update_len())
+
+        ctk.CTkLabel(body, text="Componentes PICO (opcionales, recomendados por PRISMA 2020)",
+                     font=("Arial Bold", 11), text_color=MUTED2).pack(anchor="w", pady=(10, 4))
+        grid = ctk.CTkFrame(body, fg_color="transparent")
+        grid.pack(fill="x")
+        self.parts = {}
+        hints = {"rq_population": "edificios, puentes, estructuras civiles",
+                 "rq_intervention": "acelerómetros MEMS de bajo ruido",
+                 "rq_comparison": "acelerómetros piezoeléctricos / force-balance",
+                 "rq_outcome": "identificación modal, densidad de ruido, precisión"}
+        for i, (key, label) in enumerate(pc.RQ_COMPONENTS):
+            ctk.CTkLabel(grid, text=label + ":", font=("Arial", 11), text_color=TEXT, anchor="w",
+                         width=210).grid(row=i, column=0, sticky="w", pady=3)
+            e = ctk.CTkEntry(grid, height=30, font=("Arial", 11), fg_color=SURFACE, border_color=BORDER,
+                             text_color=TEXT, placeholder_text=f"p. ej. {hints[key]}")
+            e.grid(row=i, column=1, sticky="ew", pady=3)
+            if current.get(key):
+                e.insert(0, current[key])
+            self.parts[key] = e
+        grid.columnconfigure(1, weight=1)
+
+        btns = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=0, height=60)
+        btns.pack(fill="x", side="bottom")
+        btns.pack_propagate(False)
+        ctk.CTkButton(btns, text="Guardar y ejecutar cribado ▶" if required_to_continue else "✅  Guardar",
+                      height=38, font=("Arial Bold", 12), fg_color=ACCENT, hover_color=ACCENT2, text_color="white",
+                      corner_radius=8, command=self._save).pack(side="right", padx=16, pady=10)
+        ctk.CTkButton(btns, text="Cancelar", height=38, width=100, fg_color="transparent", hover_color=SURFACE2,
+                      text_color=MUTED2, command=self.destroy).pack(side="right")
+        self._update_len()
+        make_modal(self, parent)
+        self.after(200, self.q.focus_set)
+
+    def _update_len(self):
+        n = len(self.q.get("1.0", "end").strip())
+        self.lbl_len.configure(text=f"{n} caracteres" + ("" if n >= RQ_MIN_LEN else f" (mínimo {RQ_MIN_LEN})"),
+                               text_color=MUTED if n >= RQ_MIN_LEN else ORANGE)
+
+    def _save(self):
+        q = " ".join(self.q.get("1.0", "end").split())
+        if len(q) < RQ_MIN_LEN:
+            messagebox.showwarning("Pregunta incompleta", f"Escribe tu pregunta de investigación (al menos "
+                                   f"{RQ_MIN_LEN} caracteres) para poder continuar.", parent=self)
+            return
+        data = {"research_question": q}
+        data.update({k: e.get().strip() for k, e in self.parts.items()})
+        self.destroy()
+        self.on_save(data)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -748,6 +846,12 @@ class ReviewDialog(ctk.CTkToplevel):
         self.lbl_title = ctk.CTkLabel(hdr, text="", font=("Arial Bold", 13), text_color=TEXT, anchor="w",
                                       justify="left", wraplength=860)
         self.lbl_title.pack(side="left", padx=18, pady=8, fill="x", expand=True)
+        rq = self.app.research.get("research_question", "")
+        if rq:
+            band = ctk.CTkFrame(self, fg_color="#eef2ff", corner_radius=0)
+            band.pack(fill="x")
+            ctk.CTkLabel(band, text=f"❓ Pregunta de investigación: {rq}", font=("Arial", 10), text_color="#3730a3",
+                         anchor="w", justify="left", wraplength=1000).pack(anchor="w", padx=18, pady=4)
 
         self.meta = ctk.CTkFrame(self, fg_color=SURFACE2, corner_radius=10)
         self.meta.pack(fill="x", padx=14, pady=(8, 4))
@@ -1110,6 +1214,7 @@ class SysReviewApp(ctk.CTk):
         self._settings = load_settings()
         self.output_base = Path(self._settings.get("output_base") or default_output_base())
         self._out_name_custom = False
+        self.research = {"research_question": "", **{k: "" for k, _ in pc.RQ_COMPONENTS}}
 
         self._build_ui()
         self.review_name.trace_add("write", lambda *_: self._sync_out_name())
@@ -1711,6 +1816,15 @@ class SysReviewApp(ctk.CTk):
         left_col.pack(side="left", fill="both", expand=True, padx=(0, 10), anchor="n")
         right_col.pack(side="left", fill="both", expand=True, padx=(10, 0), anchor="n")
 
+        rq_card = _card_frame(left_col, "❓ PREGUNTA DE INVESTIGACIÓN  (obligatoria para ejecutar el cribado)")
+        self.lbl_rq = ctk.CTkLabel(rq_card, text="", font=("Arial", 12), anchor="w", justify="left", wraplength=560)
+        self.lbl_rq.pack(anchor="w", fill="x")
+        self.lbl_rq_parts = ctk.CTkLabel(rq_card, text="", font=("Arial", 10), text_color=MUTED2, anchor="w",
+                                         justify="left", wraplength=560)
+        self.lbl_rq_parts.pack(anchor="w", fill="x", pady=(2, 0))
+        self.btn_rq = _ghost_button(rq_card, "✏  Escribir pregunta", ACCENT2, self._edit_research_question, height=30)
+        self.btn_rq.pack(anchor="w", pady=(6, 0))
+
         cfg = _card_frame(left_col, "CONFIGURACIÓN DEL FILTRO")
         ctk.CTkLabel(cfg, text="Sintaxis: términos separados por coma · palabra completa (\"ai\" ≠ \"main\") · "
                                "comodines monitor* y organi?ation · guion = espacio · sin distinguir acentos.",
@@ -1811,6 +1925,32 @@ class SysReviewApp(ctk.CTk):
         self.log_cribar = _log_area(right_col, height=12)
         return frame
 
+    # ── Pregunta de investigación ────────────────────────────────────────────
+    def _has_research_question(self) -> bool:
+        return len(self.research.get("research_question", "").strip()) >= RQ_MIN_LEN
+
+    def _refresh_rq(self):
+        if not hasattr(self, "lbl_rq"):
+            return
+        if self._has_research_question():
+            self.lbl_rq.configure(text=f"«{self.research['research_question']}»", text_color=TEXT)
+            parts = [f"{label}: {self.research[k]}" for k, label in pc.RQ_COMPONENTS if self.research.get(k)]
+            self.lbl_rq_parts.configure(text="   ·   ".join(parts))
+            self.btn_rq.configure(text="✏  Editar pregunta")
+        else:
+            self.lbl_rq.configure(text="⚠  Sin definir. Escríbela para poder ejecutar el cribado.", text_color=ORANGE)
+            self.lbl_rq_parts.configure(text="")
+            self.btn_rq.configure(text="✏  Escribir pregunta")
+
+    def _edit_research_question(self, then=None):
+        def saved(data):
+            self.research.update(data)
+            self._refresh_rq()
+            self._mark_dirty()
+            if then:
+                self.after(50, then)
+        ResearchQuestionDialog(self, self.research, saved, required_to_continue=then is not None)
+
     def _refresh_blocks_summary(self):
         for w in self.blocks_summary.winfo_children():
             w.destroy()
@@ -1897,6 +2037,7 @@ class SysReviewApp(ctk.CTk):
         return {
             "name": self.review_name.get().strip(),
             "description": self.review_description,
+            **self.research,
             "year_from": yf, "year_to": yt,
             "kw_required": _get_text(self.kw_required),
             "kw_secondary": _get_text(self.kw_secondary),
@@ -1915,6 +2056,10 @@ class SysReviewApp(ctk.CTk):
 
     def _start_pipeline(self):
         if self.df is None:
+            return
+        if not self._has_research_question():
+            # Obligatoria: se pide y, al guardarla, el cribado continúa automáticamente
+            self._edit_research_question(then=self._start_pipeline)
             return
         try:
             cfg = self._get_config()
@@ -2566,6 +2711,9 @@ class SysReviewApp(ctk.CTk):
         full.update(cfg or {})
         self.review_name.set(name)
         self.review_description = full.get("description", "") or ""
+        self.research = {"research_question": str(full.get("research_question") or ""),
+                         **{k: str(full.get(k) or "") for k, _ in pc.RQ_COMPONENTS}}
+        self._refresh_rq()
 
         def put(entry, v):
             entry.delete(0, "end")

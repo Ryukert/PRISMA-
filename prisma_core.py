@@ -103,6 +103,12 @@ DEFAULT_SCREEN_CFG = {
     "auto_plural": True,
     "review_near_miss": False,
 }
+RQ_COMPONENTS = [
+    ("rq_population", "Población / objeto de estudio"),
+    ("rq_intervention", "Intervención / tecnología"),
+    ("rq_comparison", "Comparación"),
+    ("rq_outcome", "Resultado / medida"),
+]
 EXCLUDE_MODES = {
     "strict": "Estricto — cualquier campo excluye",
     "balanced": "Equilibrado — título/keywords excluye, solo abstract → revisar",
@@ -1945,6 +1951,12 @@ def build_text_report(counts: dict, review_name: str, cfg: dict | None = None, p
         L += ["", "ADVERTENCIAS"] + [f"  ⚠ {w}" for w in warns]
     if cfg:
         cfg = normalize_config(cfg)
+        if cfg.get("research_question"):
+            rq = ["", "PREGUNTA DE INVESTIGACIÓN", "─" * 40, f"  {cfg['research_question']}"]
+            for key, label in RQ_COMPONENTS:
+                if cfg.get(key):
+                    rq.append(f"    · {label}: {cfg[key]}")
+            L[4:4] = rq + [""]      # justo después del encabezado
         L += ["", "CONFIGURACIÓN DEL CRIBADO", "─" * 40,
               f"  Años: {cfg['year_from'] or '…'}–{cfg['year_to'] or '…'}   ·   Año faltante: {MISSING_YEAR_MODES[cfg['missing_year']]}",
               f"  Exclusión: {EXCLUDE_MODES[cfg['exclude_mode']]}",
